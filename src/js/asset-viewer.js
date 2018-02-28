@@ -46,6 +46,7 @@
         document.getElementById('content'),
         {
             lineNumbers: true,
+            lineWrapping: true,
             readOnly: true
         }
     );
