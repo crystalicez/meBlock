@@ -25,7 +25,6 @@ cp platform/chromium/*.json             $DES/
 cp LICENSE.txt                          $DES/
 
 cp platform/webext/manifest.json        $DES/
-cp platform/webext/polyfill.js          $DES/js/
 cp platform/webext/vapi-usercss.js      $DES/js/
 cp platform/webext/vapi-webrequest.js   $DES/js/
 
