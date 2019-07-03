@@ -21,6 +21,8 @@
 
 (function() {
     'use strict';
-    window.eval = function() {
-    }.bind(window);
+    window.eval = new Proxy(window.eval, {          // jshint ignore: line
+        apply: function() {
+        }
+    });
 })();
