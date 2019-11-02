@@ -72,34 +72,32 @@
             }
             const simpleStr = simple.join(',\n');
             const complexStr = complex.join(',\n');
-            const nodeIter = document.createNodeIterator(
+            const nodeIter = document.createTreeWalker(
                 document.body,
                 NodeFilter.SHOW_ELEMENT
             );
-            const candidates = new Set();
-            for (;;) {
-                const node = nodeIter.nextNode();
-                if ( node === null ) { break; }
-                if ( node.offsetParent === null ) {
-                    candidates.add(node);
-                }
-            }
             const matched = new Set();
-            if ( simpleStr !== '') {
-                for ( const node of candidates ) {
-                    if ( Date.now() > tMax ) { return -1; }
-                    if ( node.matches(simpleStr) === false ) { continue; }
-                    candidates.delete(node);
-                    matched.add(node);
-                    if ( matched.size === 99 ) { break; }
+            let node = nodeIter.nextNode();
+            for (;;) {
+                if ( node === null ) { break; }
+                if ( Date.now() > tMax ) { return -1; }
+                if (
+                    (node.offsetParent !== null) ||
+                    (simpleStr === '' || node.matches(simpleStr) === false) &&
+                    (complexStr === '' || node.closest(complexStr) !== node)
+                ) {
+                    node = nodeIter.nextNode();
+                    continue;
                 }
-            }
-            if ( matched.size < 99 && complexStr !== '') {
-                for ( const node of candidates ) {
-                    if ( Date.now() > tMax ) { return -1; }
-                    if ( node.closest(complexStr) !== node ) { continue; }
-                    matched.add(node);
-                    if ( matched.size === 99 ) { break; }
+                matched.add(node);
+                if ( matched.size === 99 ) { break; }
+                // https://github.com/uBlockOrigin/uBlock-issues/issues/756#issuecomment-549079064
+                //   Skip descendants when a match is detected.
+                for (;;) {
+                    node = nodeIter.nextSibling();
+                    if ( node !== null ) { break; }
+                    node = nodeIter.parentNode();
+                    if ( node === null ) { break; }
                 }
             }
             return matched.size;
