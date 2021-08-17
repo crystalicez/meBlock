@@ -32,7 +32,12 @@ import { promisify } from 'util';
 /******************************************************************************/
 
 async function spawnMocha() {
-    await promisify(spawn)('mocha', [ '--experimental-vm-modules', '--no-warnings', 'tests', '--reporter', 'progress' ], { stdio: [ 'inherit', 'inherit', 'inherit' ] });
+    const files = [
+        'tests/snfe.js',
+        'tests/request-data.js',
+    ];
+
+    await promisify(spawn)('mocha', [ '--experimental-vm-modules', '--no-warnings', ...files, '--reporter', 'progress' ], { stdio: [ 'inherit', 'inherit', 'inherit' ] });
 }
 
 async function main() {
