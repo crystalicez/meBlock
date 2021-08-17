@@ -33,6 +33,7 @@ import { promisify } from 'util';
 
 async function spawnMocha() {
     const files = [
+        'tests/wasm.js',
         'tests/snfe.js',
     ];
 
