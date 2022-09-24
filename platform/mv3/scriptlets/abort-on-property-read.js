@@ -100,7 +100,7 @@ const scriptlet = (
     makeProxy(owner, chain);
     const oe = window.onerror;
     window.onerror = function(msg, src, line, col, error) {
-        if ( typeof msg === 'string' && msg.indexOf(magic) !== -1 ) {
+        if ( typeof msg === 'string' && msg.includes(magic) ) {
             return true;
         }
         if ( oe instanceof Function ) {
