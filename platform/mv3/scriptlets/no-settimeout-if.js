@@ -35,7 +35,7 @@
 
 // Important!
 // Isolate from global scope
-(function uBOL_noSetimeoutIf() {
+(function uBOL_noSetTimeoutIf() {
 
 /******************************************************************************/
 
