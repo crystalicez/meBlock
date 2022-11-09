@@ -30,6 +30,7 @@
 
 /// name no-addeventlistener-if
 /// alias noaelif
+/// alias addEventListener-defuser
 /// alias aeld
 
 /******************************************************************************/
