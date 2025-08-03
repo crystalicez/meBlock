@@ -24,11 +24,22 @@
 /******************************************************************************/
 
 const docURL = new URL(document.baseURI);
-chrome.runtime.sendMessage({
+const details = await chrome.runtime.sendMessage({
     what: 'injectCustomFilters',
     hostname: docURL.hostname,
 }).catch(( ) => {
 });
+
+if ( details?.proceduralSelectors?.length ) {
+    if ( self.ProceduralFiltererAPI ) {
+        self.customProceduralFiltererAPI = new self.ProceduralFiltererAPI();
+        self.customProceduralFiltererAPI.addSelectors(
+            details.proceduralSelectors.map(a => JSON.parse(a))
+        );
+    }
+}
+
+self.customFilters = details;
 
 /******************************************************************************/
 
