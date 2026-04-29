@@ -381,7 +381,16 @@ function pruneHostnameArray(hostnames) {
  * */
 
 function toJSONRuleset(ruleset) {
-    const nodupProps = [ 'domains', 'excludedDomains', 'requestDomains', 'excludedRequestDomains', 'initiatorDomains', 'excludedInitiatorDomains' ];
+    const nodupProps = [
+        'domains',
+        'excludedDomains',
+        'requestDomains',
+        'excludedRequestDomains',
+        'initiatorDomains',
+        'excludedInitiatorDomains',
+        'topDomains',
+        'excludedTopDomains',
+    ];
     for ( const { condition } of ruleset ) {
         if ( condition === undefined ) { continue; }
         for ( const prop of nodupProps ) {
