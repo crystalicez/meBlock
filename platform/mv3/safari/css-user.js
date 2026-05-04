@@ -31,17 +31,28 @@ const details = await chrome.runtime.sendMessage({
 });
 
 if ( details?.proceduralSelectors?.length ) {
-    if ( self.ProceduralFiltererAPI ) {
-        self.customProceduralFiltererAPI = new self.ProceduralFiltererAPI();
-        self.customProceduralFiltererAPI.addSelectors(
-            details.proceduralSelectors.map(a => JSON.parse(a))
-        );
+    if ( self.ProceduralFiltererAPI === undefined ) {
+        self.ProceduralFiltererAPI = chrome.runtime.sendMessage({
+            what: 'injectCSSProceduralAPI'
+        }).catch(( ) => {
+        });
+    }
+    await self.ProceduralFiltererAPI;
+    self.customProceduralFiltererAPI = new self.ProceduralFiltererAPI();
+    const selectors = details.proceduralSelectors.map(a => JSON.parse(a));
+    const declaratives = selectors.filter(a => a.cssable);
+    if ( declaratives.length !== 0 ) {
+        self.customProceduralFiltererAPI.addDeclaratives(declaratives);
+    }
+    const procedurals = selectors.filter(a => !a.cssable);
+    if ( procedurals.length !== 0 ) {
+        self.customProceduralFiltererAPI.addProcedurals(procedurals);
     }
 }
 
 if ( details?.plainSelectors?.length ) {
     const selectors = details.plainSelectors;
-    self.addEventListener('pageshow', ( ) => {
+    self.addEventListener('pagereveal', ( ) => {
         chrome.runtime.sendMessage({
             what: 'insertCSS',
             css: `${selectors.join(',\n')}{display:none!important;}`,
