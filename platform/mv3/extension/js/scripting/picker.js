@@ -257,7 +257,12 @@ async function previewSelector(selector) {
         if ( self.pickerProceduralFilteringAPI === undefined ) {
             self.pickerProceduralFilteringAPI = new self.ProceduralFiltererAPI();
         }
-        self.pickerProceduralFilteringAPI.addProcedurals([ JSON.parse(selector) ]);
+        const pselector = JSON.parse(selector);
+        if ( pselector.cssable ) {
+            self.pickerProceduralFilteringAPI.addDeclaratives([ pselector ]);
+        } else {
+            self.pickerProceduralFilteringAPI.addProcedurals([ pselector ]);
+        }
         return;
     }
     previewedCSS = `${selector}{display:none!important;}`;
