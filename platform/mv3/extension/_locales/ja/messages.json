@@ -255,6 +255,14 @@
     "message": "望ましくない可能性のあるサイトへのナビゲーションはブロックされ、次に進むためのオプションが表示されます。",
     "description": "Short description for a checkbox in the options page"
   },
+  "enablePopupBlockLabel": {
+    "message": "Enable pop-up blocking",
+    "description": "Label for a checkbox in the options page"
+  },
+  "enablePopupBlockLegend": {
+    "message": "When active, matching filters will automatically close unwanted browser tabs created by websites.",
+    "description": "Short description for a checkbox in the options page"
+  },
   "developerModeLabel": {
     "message": "開発者モード",
     "description": "Label for a checkbox in the options page"

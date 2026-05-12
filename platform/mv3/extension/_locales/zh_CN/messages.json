@@ -255,6 +255,14 @@
     "message": "导航至潜在不良网站的操作将被拦截，并且您将可以选择继续前往。",
     "description": "Short description for a checkbox in the options page"
   },
+  "enablePopupBlockLabel": {
+    "message": "Enable pop-up blocking",
+    "description": "Label for a checkbox in the options page"
+  },
+  "enablePopupBlockLegend": {
+    "message": "When active, matching filters will automatically close unwanted browser tabs created by websites.",
+    "description": "Short description for a checkbox in the options page"
+  },
   "developerModeLabel": {
     "message": "开发者模式",
     "description": "Label for a checkbox in the options page"

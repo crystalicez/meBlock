@@ -255,6 +255,14 @@
     "message": "A navegação para sites potencialmente indesejáveis ​​será bloqueada e você terá a opção de prosseguir.",
     "description": "Short description for a checkbox in the options page"
   },
+  "enablePopupBlockLabel": {
+    "message": "Enable pop-up blocking",
+    "description": "Label for a checkbox in the options page"
+  },
+  "enablePopupBlockLegend": {
+    "message": "When active, matching filters will automatically close unwanted browser tabs created by websites.",
+    "description": "Short description for a checkbox in the options page"
+  },
   "developerModeLabel": {
     "message": "Modo de desenvolvedor",
     "description": "Label for a checkbox in the options page"
