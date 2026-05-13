@@ -256,11 +256,11 @@
     "description": "Short description for a checkbox in the options page"
   },
   "enablePopupBlockLabel": {
-    "message": "Enable pop-up blocking",
+    "message": "Felugró ablakok blokkolásának engedélyezése",
     "description": "Label for a checkbox in the options page"
   },
   "enablePopupBlockLegend": {
-    "message": "When active, matching filters will automatically close unwanted browser tabs created by websites.",
+    "message": "Ha aktív, a megfelelő szűrők automatikusan bezárják a webhelyek által létrehozott kéretlen böngészőlapokat.",
     "description": "Short description for a checkbox in the options page"
   },
   "developerModeLabel": {

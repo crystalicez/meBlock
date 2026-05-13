@@ -256,11 +256,11 @@
     "description": "Short description for a checkbox in the options page"
   },
   "enablePopupBlockLabel": {
-    "message": "Enable pop-up blocking",
+    "message": "Habilitar el bloqueo de emergentes",
     "description": "Label for a checkbox in the options page"
   },
   "enablePopupBlockLegend": {
-    "message": "When active, matching filters will automatically close unwanted browser tabs created by websites.",
+    "message": "Cuando está activo, los filtros que coincidan cerraran automáticamente las pestañas no solicitadas creadas por los sitios web.",
     "description": "Short description for a checkbox in the options page"
   },
   "developerModeLabel": {

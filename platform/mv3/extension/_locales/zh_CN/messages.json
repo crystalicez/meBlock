@@ -256,11 +256,11 @@
     "description": "Short description for a checkbox in the options page"
   },
   "enablePopupBlockLabel": {
-    "message": "Enable pop-up blocking",
+    "message": "开启弹出窗口拦截",
     "description": "Label for a checkbox in the options page"
   },
   "enablePopupBlockLegend": {
-    "message": "When active, matching filters will automatically close unwanted browser tabs created by websites.",
+    "message": "开启后，匹配的过滤器将自动关闭网站创建的不需要的浏览器标签页。",
     "description": "Short description for a checkbox in the options page"
   },
   "developerModeLabel": {
