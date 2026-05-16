@@ -92,7 +92,7 @@
     "description": "Text label heading the import/export area of custom filters"
   },
   "customFiltersImportTextareaPlaceholder": {
-    "message": "Liitä lisättävät kosmeettiset suodattimet tähän",
+    "message": "Liitä lisättävät kosmeettiset/scriptlet-suodattimet tähän",
     "description": "Placeholder text which describes the purpose of the textarea widget"
   },
   "aboutChangelog": {
@@ -256,11 +256,11 @@
     "description": "Short description for a checkbox in the options page"
   },
   "enablePopupBlockLabel": {
-    "message": "Enable pop-up blocking",
+    "message": "Käytä ponnahdusestoa",
     "description": "Label for a checkbox in the options page"
   },
   "enablePopupBlockLegend": {
-    "message": "When active, matching filters will automatically close unwanted browser tabs created by websites.",
+    "message": "Kun käytössä, suljetaan suodattimia vastaavat verkkosivustojen avaamat ei-toivotut selainvälilehdet automaattisesti.",
     "description": "Short description for a checkbox in the options page"
   },
   "developerModeLabel": {
@@ -272,7 +272,7 @@
     "description": "Short description for a checkbox in the options page"
   },
   "settingsBackupRestoreLabel": {
-    "message": "Varmuuskopioi / Palauta",
+    "message": "Varmuuskopiointi",
     "description": "The header text for the back up/restore section"
   },
   "settingsBackupRestoreSummary": {
