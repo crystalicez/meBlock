@@ -20,6 +20,7 @@ import tarfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import threading
 import time
+from urllib.parse import urlsplit
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from benchmark_firefox import collect_idle, geckodriver_path
@@ -100,8 +101,9 @@ def run_build(source, assets):
     return output
 
 
-def probe_package(build, destination, role, endpoint, token):
+def probe_package(build, destination, role, endpoint, token, dataset_bytes):
     config = {"role": role, "endpoint": endpoint, "token": token}
+    (build / "assets" / "meblock-requests.json").write_bytes(dataset_bytes)
     text = PROBE_PATH.read_text(encoding="utf-8")
     if "__MEBLOCK_CONFIG__" not in text:
         raise RuntimeError("Probe configuration placeholder not found")
@@ -183,7 +185,7 @@ class Handler(BaseHTTPRequestHandler):
         self.respond(204)
 
     def do_GET(self):
-        if self.path != "/dataset":
+        if urlsplit(self.path).path != "/dataset":
             return self.respond(404)
         self.respond(200, self.server.state.dataset)
 
@@ -227,7 +229,7 @@ def firefox_run(xpi, role, state, driver_binary, firefox_binary,
         if reported_id != "uBlock0@raymondhill.net":
             raise RuntimeError(f"Unexpected upstream test addon ID {reported_id!r}")
         if result.get("status") != "ok":
-            raise RuntimeError(result.get("message", "Firefox benchmark failed"))
+            raise RuntimeError(result.get("message", "Firefox benchmark failed") + "\n" + result.get("stack", ""))
         if result.get("engine_ready") is not True:
             raise RuntimeError("Benchmark ran without filtering readiness")
         result["addon_id_verified"] = True
@@ -377,7 +379,7 @@ def main():
             built = run_build(checkout, assets)
             snapshots[role] = source_files(built)
             xpi = session_dir / role / "instrumented.xpi"
-            packages[role] = probe_package(built, xpi, role, endpoint, state.token)
+            packages[role] = probe_package(built, xpi, role, endpoint, state.token, raw)
             builds[role] = xpi
             metadata["steps"].append(f"{role} built and test probe injected")
         metadata["build_delta"] = source_delta(snapshots["upstream"], snapshots["meblock"])

@@ -88,8 +88,9 @@ class CollectorTests(unittest.TestCase):
         worker.start()
         endpoint = f"http://127.0.0.1:{server.server_port}"
         try:
-            with urllib.request.urlopen(endpoint + "/dataset", timeout=5) as result:
-                self.assertEqual(result.read(), b'[]')
+            for path in ("/dataset", "/dataset?_=8"):
+                with urllib.request.urlopen(endpoint + path, timeout=5) as result:
+                    self.assertEqual(result.read(), b'[]')
             body = json.dumps({"token": "correct-secret", "role": "upstream", "status": "ok"}).encode()
             request = urllib.request.Request(
                 endpoint + "/result", data=body,

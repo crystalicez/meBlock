@@ -43,7 +43,7 @@ function prepareContext(fctxt, request) {
 
 async function main() {
     await ready();
-    µb.hiddenSettings.benchmarkDatasetURL = base + '/dataset';
+    µb.hiddenSettings.benchmarkDatasetURL = 'assets/meblock-requests.json';
     const response = await fetch(base + '/dataset', { cache: 'no-store' });
     if (!response.ok) { throw new Error('Dataset fetch failed: HTTP ' + response.status); }
     const data = await response.json();
@@ -53,7 +53,7 @@ async function main() {
 
     const official = await benchmarkStaticNetFiltering({ redirectEngine });
     if (!official.includes('Benchmarked static network filtering engine:')) {
-        throw new Error('Upstream benchmark did not execute');
+        throw new Error('Upstream benchmark did not execute: ' + String(official));
     }
     const documents = data.filter(row => row.cpt === 'main_frame' || row.cpt === 'document');
     const extra = {};
@@ -92,6 +92,6 @@ async function main() {
 
 main().catch(async error => {
     console.error('meBlock benchmark probe failure', error);
-    try { await report({ status: 'error', message: String(error?.stack || error) }); }
+    try { await report({ status: 'error', message: String(error), stack: String(error?.stack || '') }); }
     catch (uploadError) { console.error('Failed to report benchmark failure', uploadError); }
 });
