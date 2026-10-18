@@ -1,6 +1,6 @@
 # Firefox baseline for meBlock
 
-Measured on 2026-10-18. This is a **pre-optimization baseline** for the unmodified uBlock Origin source imported into meBlock.
+Measured on 2026-10-18. This is a **pre-optimization baseline** for the unmodified uBlock Origin source imported into meBlock. These browser-wide numbers are exploratory and are not the primary performance gate. For repeatable filtering-engine measurements, see [Filtering benchmark for meBlock](meblock-filtering-benchmark.md).
 
 ## Exact source and environment
 
