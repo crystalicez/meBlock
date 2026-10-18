@@ -11,6 +11,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import statistics
@@ -104,6 +105,11 @@ def run_build(source, assets):
 def probe_package(build, destination, role, endpoint, token, dataset_bytes):
     config = {"role": role, "endpoint": endpoint, "token": token}
     (build / "assets" / "meblock-requests.json").write_bytes(dataset_bytes)
+    core_filters = build / "assets" / "ublock" / "filters.min.txt"
+    if not core_filters.is_file():
+        raise RuntimeError("Built-in filter list missing for browser behavior fixture")
+    with core_filters.open("a", encoding="utf-8") as stream:
+        stream.write("\n||127.0.0.1^/test-blocked.js$script\n")
     text = PROBE_PATH.read_text(encoding="utf-8")
     if "__MEBLOCK_CONFIG__" not in text:
         raise RuntimeError("Probe configuration placeholder not found")
@@ -170,13 +176,13 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         return
 
-    def respond(self, status, body=b""):
+    def respond(self, status, body=b"", content_type="application/json"):
         self.send_response(status)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -185,9 +191,22 @@ class Handler(BaseHTTPRequestHandler):
         self.respond(204)
 
     def do_GET(self):
-        if urlsplit(self.path).path != "/dataset":
-            return self.respond(404)
-        self.respond(200, self.server.state.dataset)
+        path = urlsplit(self.path).path
+        if path == "/dataset":
+            return self.respond(200, self.server.state.dataset)
+        if path == "/fixture":
+            html = (
+                '<!doctype html><html><body>'
+                '<script src="/test-allowed.js"></script>'
+                '<script src="/test-blocked.js"></script>'
+                '</body></html>'
+            )
+            return self.respond(200, html.encode(), "text/html; charset=utf-8")
+        if path in ("/test-allowed.js", "/test-blocked.js"):
+            value = "allowed" if path == "/test-allowed.js" else "blocked"
+            script = f"window.__meblock_{value} = true;"
+            return self.respond(200, script.encode(), "application/javascript")
+        self.respond(404)
 
     def do_POST(self):
         if self.path != "/result":
@@ -275,9 +294,12 @@ def summarize_role(series):
     }
 
 
-def compare(data, dataset):
+def compare(data, dataset, identical_build=False):
     a, b = data["upstream"], data["meblock"]
     behavior = check_behavior(a, b, dataset)
+    aggregate_signatures = []
+    auxiliary_signatures = []
+    documents = sum(row['cpt'] in ('main_frame', 'document') for row in dataset)
     for label in ROLES:
         for row in data[label]:
             if row["dataset_rows"] != len(dataset):
@@ -289,13 +311,33 @@ def compare(data, dataset):
                 ("blocked", "blocked"), ("unblocked", "allowed"), ("not_blocked", "passed")
             )):
                 raise ValueError(f"{label} official benchmark and behavior counts disagree")
+            aggregate_signatures.append(official[0]["counts"])
+            auxiliary = {}
+            if documents:
+                for kind in ('cosmetic', 'scriptlet'):
+                    text = row.get('extra', {}).get(kind, '')
+                    match = re.search(r'Evaluated\s+(\d+)\s+retrieval', text)
+                    if match is None or int(match.group(1)) != documents:
+                        raise ValueError(f'{label} {kind} benchmark did not process all document requests')
+                    auxiliary[kind] = int(match.group(1))
+            auxiliary_signatures.append(auxiliary)
+    behavior["auxiliary_benchmarks_match"] = all(
+        signature == auxiliary_signatures[0] for signature in auxiliary_signatures
+    )
+    behavior["aggregate_modifier_counts_match"] = all(
+        signature == aggregate_signatures[0] for signature in aggregate_signatures
+    )
+    behavior["reference_aggregate_counts"] = aggregate_signatures[0]
     left, right = summarize_role(a), summarize_role(b)
-    matching = behavior["per_request_match"]
+    matching = (behavior["per_request_match"] and behavior["aggregate_modifier_counts_match"]
+                and behavior["auxiliary_benchmarks_match"])
     noise = max(left["range_us_per_request"][1] - left["range_us_per_request"][0],
                 right["range_us_per_request"][1] - right["range_us_per_request"][0])
     delta = right["median_us_per_request"] - left["median_us_per_request"]
     if not matching:
         verdict = "FAIL: behavioral regression"
+    elif identical_build:
+        verdict = "CONTROL: byte-identical builds; timing differences are environmental"
     elif len(a) < 5 or len(b) < 5:
         verdict = "INCONCLUSIVE: fewer than five runs per build"
     elif abs(delta) <= noise:
@@ -305,6 +347,7 @@ def compare(data, dataset):
     return {
         "verdict": verdict,
         "correctness": behavior,
+        "builds_identical": identical_build,
         "upstream": left,
         "meblock": right,
         "delta_median_us_per_request": round(delta, 5),
@@ -404,8 +447,11 @@ def main():
                 (session_dir / f"{role}-run-{iteration + 1}.json").write_text(
                     json.dumps(result, indent=2) + "\n", encoding="utf-8"
                 )
-        metadata["comparison"] = compare(data, dataset)
-        metadata["status"] = "failed" if not metadata["comparison"]["correctness"]["per_request_match"] else "complete"
+        metadata["comparison"] = compare(
+            data, dataset, identical_build=metadata["build_delta"]["files_different"] == 0
+        )
+        metadata["status"] = ("failed" if metadata["comparison"]["verdict"].startswith("FAIL")
+                              else "complete")
         return 1 if metadata["status"] == "failed" else 0
     except Exception as error:
         metadata["status"] = "failed"

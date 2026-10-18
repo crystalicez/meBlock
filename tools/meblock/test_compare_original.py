@@ -54,6 +54,15 @@ class CompareTests(unittest.TestCase):
         self.assertTrue(report["correctness"]["per_request_match"])
         self.assertIn("INCONCLUSIVE", report["verdict"])
 
+    def test_identical_builds_are_control_even_when_time_differs(self):
+        data = {
+            "upstream": [make_run(speed=2) for _ in range(5)],
+            "meblock": [make_run(speed=20) for _ in range(5)],
+        }
+        result = runner.compare(data, DATASET, identical_build=True)
+        self.assertTrue(result["builds_identical"])
+        self.assertIn("CONTROL", result["verdict"])
+
     def test_regression_detected_even_if_aggregate_counts_match(self):
         data = {
             "upstream": [make_run() for _ in range(5)],
@@ -62,6 +71,35 @@ class CompareTests(unittest.TestCase):
         outcome = runner.compare(data, DATASET)
         self.assertEqual(outcome["verdict"], "FAIL: behavioral regression")
         self.assertEqual(outcome["correctness"]["mismatches_first_25"][0]["request_index"], 0)
+
+    def test_modifier_regression_detected_despite_equal_block_counts(self):
+        data = {
+            "upstream": [make_run() for _ in range(5)],
+            "meblock": [make_run() for _ in range(5)],
+        }
+        for row in data["meblock"]:
+            row["official"] = row["official"].replace("redirect=: 0", "redirect=: 1")
+        report = runner.compare(data, DATASET)
+        self.assertEqual(report["verdict"], "FAIL: behavioral regression")
+        self.assertFalse(report["correctness"]["aggregate_modifier_counts_match"])
+
+    def test_document_benchmark_must_process_every_document(self):
+        dataset = [dict(row) for row in DATASET]
+        dataset[0]["cpt"] = "main_frame"
+        data = {
+            "upstream": [make_run() for _ in range(5)],
+            "meblock": [make_run() for _ in range(5)],
+        }
+        for role in ("upstream", "meblock"):
+            for row in data[role]:
+                row["extra"] = {
+                    "cosmetic": "Evaluated 1 retrieval in 2 ms",
+                    "scriptlet": "Evaluated 1 retrieval in 2 ms",
+                }
+        self.assertTrue(runner.compare(data, dataset)["correctness"]["auxiliary_benchmarks_match"])
+        data["meblock"][0]["extra"]["scriptlet"] = "Evaluated 0 retrieval in 2 ms"
+        with self.assertRaisesRegex(ValueError, "scriptlet benchmark"):
+            runner.compare(data, dataset)
 
     def test_incorrect_upstream_report_rejected(self):
         data = {

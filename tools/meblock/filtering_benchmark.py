@@ -54,6 +54,8 @@ def synthesize(n: int, seed: int) -> list[dict]:
         ("https://cdn.example/styles/site.css", "stylesheet"),
         ("https://images.example/photo.jpg", "image"),
         ("https://media.example/video.mp4", "media"),
+        ("https://publisher.example/home", "main_frame"),
+        ("https://publisher.example/embedded", "sub_frame"),
     ]
     return [
         {

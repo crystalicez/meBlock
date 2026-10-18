@@ -63,10 +63,26 @@ async function main() {
     }
 
     const fctxt = new FilteringContext();
+    const warmupPasses = 2;
+    const timedPasses = 5;
+    const elapsedPerPass = [];
+    for (let pass = 0; pass < warmupPasses + timedPasses; pass++) {
+        const started = performance.now();
+        let checksum = 0;
+        for (const row of data) {
+            prepareContext(fctxt, row);
+            sfne.redirectURL = undefined;
+            checksum += sfne.matchRequest(fctxt);
+        }
+        if (pass >= warmupPasses) {
+            elapsedPerPass.push(performance.now() - started);
+        }
+        if (checksum < 0) { throw new Error('Invalid filtering checksum'); }
+    }
+
     const outcomes = [];
     let blocked = 0;
     let allowed = 0;
-    const started = performance.now();
     for (const row of data) {
         prepareContext(fctxt, row);
         sfne.redirectURL = undefined;
@@ -75,12 +91,15 @@ async function main() {
         if (decision === 2) { allowed += 1; }
         outcomes.push(decision);
     }
-    const elapsed = performance.now() - started;
+    const elapsed = elapsedPerPass.reduce((total, ms) => total + ms, 0);
     await report({
         status: 'ok',
         dataset_rows: data.length,
+        warmup_passes: warmupPasses,
+        measured_passes: timedPasses,
+        individual_pass_ms: elapsedPerPass,
         engine_match_ms: elapsed,
-        us_per_request: elapsed * 1000 / data.length,
+        us_per_request: elapsed * 1000 / (data.length * timedPasses),
         outcomes,
         decisions: { blocked, allowed, passed: data.length - blocked - allowed },
         official,

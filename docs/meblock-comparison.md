@@ -35,7 +35,7 @@ To compare specific immutable versions:
 python tools/meblock/compare_original.py --upstream-ref 9e0dff715d --meblock-ref HEAD --runs 5
 ```
 
-**Clean Git working tree required.** Uncommitted source changes are excluded on purpose. Commit an experiment to a temporary branch before comparing, or explicitly select the intended commit as `--meblock-ref`. The suite records both resolved commit hashes in its output.
+The suite exports **committed revisions only**. Uncommitted source edits are not included even when the working tree is dirty. Commit the implementation you intend to measure, or select its Git commit with `--meblock-ref`. The report records the resolved hashes and whether the working tree was dirty.
 
 For a quick diagnostic run with system-wide idle memory and CPU readings:
 
@@ -53,9 +53,9 @@ Those process-wide readings are secondary diagnostics, not reliable per-extensio
 | Build regression | Both Firefox builds must succeed; resulting file hashes are compared | All modified bundled files are visible |
 | Runtime | Separate Firefox profiles, installed addon ID and filter engine readiness | Code actually ran in Firefox |
 | Original benchmark | Calls `benchmarkStaticNetFiltering` in both builds | Verifies upstream's engine benchmark completes |
-| Behavior regression | Full decision vector, one result for every request | **Every request's block/allow/passthrough result must match**, even when aggregate counts are identical |
+| Behavior regression | Full decision vector plus upstream modifier counts | **Every request's block/allow/passthrough result must match**, including unchanged aggregate redirect, removeparam, CSP and other modifier counts |
 | Built-in extra benchmarks | Cosmetic and scriptlet benchmarking where dataset contains document requests | Separate diagnostic timings |
-| Performance | Direct engine matching time in microseconds per request across alternating A/B | Median, range, noise floor and conservative verdict |
+| Performance | Two in-session warm-ups and five measured engine passes, repeated across alternating A/B sessions | Median, range, noise floor, byte-identical control verdict and conservative comparison |
 | Firefox processes | Optional idle CPU time and summed RSS after benchmark | Diagnostic only; not per-extension attribution |
 | Offline tests | `python -m unittest discover -s tools/meblock -p test_*.py -v` | Catches regressions in the harness and comparator |
 
@@ -80,7 +80,7 @@ The script writes a separate dated session directory under `dist/build/meblock-c
 - `upstream/checkout/dist/build/build.log` and equivalent fork path: build logs.
 - `upstream/instrumented.xpi` and `meblock/instrumented.xpi`: diagnostic test packages, **not distributable releases**.
 
-Interpret results conservatively: five or more runs per build, same request corpus and list snapshots, alternating A/B order, and no behavior differences. If an observed timing difference is within the spread of individual measurements, the result is *inconclusive*. Equal timing for code-identical builds is expected.
+Interpret results conservatively: five or more runs per build, same request corpus and list snapshots, alternating A/B order, and no behavior differences. If an observed timing difference is within the spread of individual measurements, the result is *inconclusive*. When both built trees are byte-identical, any apparent speedup is environmental noise, not a change attributable to meBlock.
 
 Do not claim improvement without evaluating performance profiles and realistic browsing workloads. A direct engine microbenchmark is only one component of total page-load cost.
 
