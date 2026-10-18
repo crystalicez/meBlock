@@ -16,6 +16,7 @@ spec.loader.exec_module(runner)
 from browser_fixtures import (
     ROUTES, RULES, WITH_ADDON, WITHOUT_ADDON,
     PARAMETERS_WITH_ADDON, PARAMETERS_WITHOUT_ADDON,
+    DYNAMIC_FIREWALL_EXPECTED, STATE_PERSISTENCE_KEY,
 )
 
 
@@ -40,6 +41,18 @@ def make_run(outcomes=None, speed=7, modifier_masks=None):
         "outcomes": outcomes, "modifier_masks": modifier_masks, "us_per_request": speed,
         "browser_behavior": dict(WITH_ADDON),
         "browser_parameters": dict(PARAMETERS_WITH_ADDON),
+        "dynamic_firewall": {
+            "cases": dict(DYNAMIC_FIREWALL_EXPECTED),
+            "rollback": True,
+            "source": "fixture-meblock.invalid",
+            "destination": "media.fixture-meblock.invalid",
+        },
+        "state_persistence": {
+            "setting": STATE_PERSISTENCE_KEY,
+            "changed_and_reloaded": True,
+            "restored": True,
+            "originally": False,
+        },
         "dataset_rows": 3, "official": official(
             blocked, redirect=sum(bool(mask & 1) for mask in modifier_masks)
         ),
@@ -220,6 +233,26 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(report["verdict"], "FAIL: behavioral regression")
         self.assertFalse(report["correctness"]["url_modifier_match"])
 
+    def test_dynamic_firewall_regression_fails(self):
+        data = {
+            "upstream": [make_run() for _ in range(5)],
+            "meblock": [make_run() for _ in range(5)],
+        }
+        data["meblock"][0]["dynamic_firewall"]["cases"]["allow"] = 1
+        report = runner.compare(data, DATASET)
+        self.assertEqual(report["verdict"], "FAIL: behavioral regression")
+        self.assertFalse(report["correctness"]["dynamic_firewall_match"])
+
+    def test_settings_reload_regression_fails(self):
+        data = {
+            "upstream": [make_run() for _ in range(5)],
+            "meblock": [make_run() for _ in range(5)],
+        }
+        data["meblock"][0]["state_persistence"]["restored"] = False
+        report = runner.compare(data, DATASET)
+        self.assertEqual(report["verdict"], "FAIL: behavioral regression")
+        self.assertFalse(report["correctness"]["settings_reload_and_restore_match"])
+
     def test_source_delta(self):
         self.assertEqual(runner.source_delta({"a": "1"}, {"a": "2", "b": "3"})["files_different"], 2)
 
@@ -249,6 +282,10 @@ class PackageTests(unittest.TestCase):
             with ZipFile(xpi) as archive:
                 self.assertEqual(archive.read("assets/meblock-requests.json"), b"[]")
                 self.assertIn(b"meblock-probe.js", archive.read("background.html"))
+                self.assertIn(
+                    b"checkPersistedSettings",
+                    archive.read("js/meblock-state-probe.js"),
+                )
                 self.assertIn(
                     b"test-blocked.js", archive.read("assets/ublock/filters.min.txt")
                 )

@@ -25,9 +25,11 @@ from urllib.parse import parse_qs, urlsplit
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from benchmark_firefox import collect_idle, geckodriver_path
+from comparison_stats import paired_performance, timing_verdict
 from browser_fixtures import (
     FIXTURE_VERSION, OBSERVATION_SCRIPT, ROUTES, RULES, WITH_ADDON, WITHOUT_ADDON,
     PARAMETERS_WITH_ADDON, PARAMETERS_WITHOUT_ADDON,
+    DYNAMIC_FIREWALL_EXPECTED, STATE_PERSISTENCE_KEY,
 )
 from filtering_benchmark import parse_report_text, valid_rows
 
@@ -120,6 +122,8 @@ def probe_package(build, destination, role, endpoint, token, dataset_bytes):
     (build / "js" / "meblock-probe.js").write_text(
         text.replace("__MEBLOCK_CONFIG__", json.dumps(config)), encoding="utf-8"
     )
+    state_probe = Path(__file__).with_name("state_probe.js")
+    (build / "js" / "meblock-state-probe.js").write_bytes(state_probe.read_bytes())
     bg = build / "background.html"
     html = bg.read_text(encoding="utf-8")
     anchor = "</body>"
@@ -434,6 +438,24 @@ def compare(data, dataset, identical_build=False):
     behavior["url_modifier_match"] = all(
         parameters == PARAMETERS_WITH_ADDON for parameters in url_parameters
     )
+    dynamic_checks = [
+        row.get("dynamic_firewall") for role in ROLES for row in data[role]
+    ]
+    behavior["dynamic_firewall_match"] = all(
+        isinstance(check, dict)
+        and check.get("cases") == DYNAMIC_FIREWALL_EXPECTED
+        and check.get("rollback") is True for check in dynamic_checks
+    )
+    settings_checks = [
+        row.get("state_persistence") for role in ROLES for row in data[role]
+    ]
+    behavior["settings_reload_and_restore_match"] = all(
+        isinstance(check, dict)
+        and check.get("setting") == STATE_PERSISTENCE_KEY
+        and check.get("changed_and_reloaded") is True
+        and check.get("restored") is True
+        and type(check.get("originally")) is bool for check in settings_checks
+    )
     filters = [row.get("selected_filter_lists") for role in ROLES for row in data[role]]
     behavior["filter_list_selection_match"] = (
         None if all(value is None for value in filters)
@@ -444,24 +466,27 @@ def compare(data, dataset, identical_build=False):
                 and behavior["aggregate_modifier_counts_match"]
                 and behavior["auxiliary_benchmarks_match"] and behavior["browser_page_match"]
                 and behavior["url_modifier_match"]
+                and behavior["dynamic_firewall_match"]
+                and behavior["settings_reload_and_restore_match"]
                 and behavior["filter_list_selection_match"] is not False)
     noise = max(left["range_us_per_request"][1] - left["range_us_per_request"][0],
                 right["range_us_per_request"][1] - right["range_us_per_request"][0])
     delta = right["median_us_per_request"] - left["median_us_per_request"]
+    paired = paired_performance(
+        [row["us_per_request"] for row in a],
+        [row["us_per_request"] for row in b],
+    )
     if not matching:
         verdict = "FAIL: behavioral regression"
     elif identical_build:
         verdict = "CONTROL: byte-identical builds; timing differences are environmental"
-    elif len(a) < 5 or len(b) < 5:
-        verdict = "INCONCLUSIVE: fewer than five runs per build"
-    elif abs(delta) <= noise:
-        verdict = "INCONCLUSIVE: difference within run-to-run spread"
     else:
-        verdict = "CANDIDATE: repeat with realistic requests and profiler"
+        verdict = timing_verdict(paired)
     return {
         "verdict": verdict,
         "correctness": behavior,
         "builds_identical": identical_build,
+        "paired_performance": paired,
         "upstream": left,
         "meblock": right,
         "delta_median_us_per_request": round(delta, 5),
@@ -520,7 +545,8 @@ def main():
         "harness_files_sha256": {
             name: hash_file(Path(__file__).with_name(name))
             for name in (
-                "compare_original.py", "browser_probe.js", "browser_fixtures.py",
+                "compare_original.py", "browser_probe.js", "state_probe.js",
+                "browser_fixtures.py", "comparison_stats.py",
                 "benchmark_firefox.py", "filtering_benchmark.py",
             )
         },

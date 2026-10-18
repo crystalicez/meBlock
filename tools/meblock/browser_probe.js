@@ -1,5 +1,6 @@
 /* Test-only entrypoint. Installed only into isolated Firefox build artifacts. */
 import µb from './background.js';
+import { checkDynamicFirewall, checkPersistedSettings } from './meblock-state-probe.js';
 import { FilteringContext } from './filtering-context.js';
 import sfne from './static-net-filtering.js';
 import { redirectEngine } from './redirect-engine.js';
@@ -43,6 +44,9 @@ function prepareContext(fctxt, request) {
 
 async function main() {
     await ready();
+    const persistence = await checkPersistedSettings(µb);
+    if (persistence.continued === false) { return; }
+    const dynamicFirewall = checkDynamicFirewall();
     µb.hiddenSettings.benchmarkDatasetURL = 'assets/meblock-requests.json';
     const response = await fetch(base + '/dataset', { cache: 'no-store' });
     if (!response.ok) { throw new Error('Dataset fetch failed: HTTP ' + response.status); }
@@ -124,6 +128,8 @@ async function main() {
         decisions: { blocked, allowed, passed: data.length - blocked - allowed },
         official,
         extra,
+        state_persistence: persistence.state,
+        dynamic_firewall: dynamicFirewall,
         engine_ready: µb.readyToFilter,
         engine_ready_after: µb.supportStats.allReadyAfter,
         selected_filter_lists: Array.from(µb.selectedFilterLists).sort(),

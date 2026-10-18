@@ -39,7 +39,9 @@ jobs:
       - name: Unit regression tests
         run: python -m unittest discover -s tools/meblock -p "test_*.py" -v
       - name: Test-only browser probe syntax
-        run: node --check tools/meblock/browser_probe.js
+        run: |
+          node --check tools/meblock/browser_probe.js
+          node --check tools/meblock/state_probe.js
       - name: Generate deterministic request corpus
         run: python tools/meblock/filtering_benchmark.py synthetic --count 1000 --seed 20261018 --out dist/build/ci-requests.json
 

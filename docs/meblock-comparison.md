@@ -55,22 +55,24 @@ Those process-wide readings are secondary diagnostics, not reliable per-extensio
 | Original benchmark | Calls `benchmarkStaticNetFiltering` in both builds | Verifies upstream's engine benchmark completes |
 | Behavior regression | Full per-request decision vector and six modifier bitmasks | Compares block/allow outcomes and each redirect, removeparam, URL skip, CSP, permissions and replace decision by request index; also checks aggregate counts against upstream |
 | Browser behavior fixture | Independent Firefox-without-addon negative control, then both test builds | Asserts actual script, image, iframe, XHR, noop redirect, CSS hiding, scriptlet injection and query-parameter removal behavior |
+| Dynamic firewall state | Set block, allow, noop and destination override on an isolated source hostname, then roll back | Checks actual uBO session firewall API and asserts no leftover rule |
+| Settings reload and restore | Toggle real `colorBlindFriendly` user setting, persist, reload disposable extension, then restore | Fails if persisted value does not survive the reload or cannot be restored |
 | Built-in extra benchmarks | Cosmetic and scriptlet benchmarking where dataset contains document requests | Separate diagnostic timings |
-| Performance | Two in-session warm-ups and five measured engine passes, repeated across alternating A/B sessions | Median, range, noise floor, byte-identical control verdict and conservative comparison |
+| Performance | Two in-session warm-ups and five measured engine passes, repeated across alternating A/B sessions | Median and range, per-pair percentage change, paired bootstrap interval, byte-identical control verdict; at least 10 A/B pairs required for a timing candidate |
 | Startup diagnostics | Extension-reported engine-ready time, when available | Recorded separately from filtering speed; not browser startup overhead |
 | Firefox processes | Optional idle CPU time and summed RSS after benchmark | Diagnostic only; not per-extension attribution |
 | Offline tests | `python -m unittest discover -s tools/meblock -p test_*.py -v` | Catches regressions in the harness and comparator |
 
-**Coverage limits:** These fixtures exercise selected network and page-side effects but not the full extension. Dynamic firewall rules, CNAME uncloaking, HTML filtering, filter subscriptions, settings persistence, large-page behavior, all redirect resources, advanced scriptlets and private memory attribution require separate tests. The upstream cosmetic/scriptlet microbenchmarks still expose only aggregate timings. Synthetic datasets do not establish real-user speedups.
+**Coverage limits:** These fixtures exercise selected network and page-side effects and the internal session firewall state. Browser-wide dynamic-firewall blocking, CNAME uncloaking, HTML filtering, filter subscriptions, persistence across a full Firefox process restart, large-page behavior, all redirect resources, advanced scriptlets and private memory attribution require separate tests. The settings check exercises persistence across **extension reload**, not process restart. The upstream cosmetic/scriptlet microbenchmarks still expose only aggregate timings. Synthetic datasets do not establish real-user speedups.
 
 The GitHub workflow `.github/workflows/meblock-regression.yml` automatically runs Python unit regression tests, JavaScript syntax validation and deterministic corpus generation on Windows. A separate **opt-in Firefox integration job** is available from GitHub Actions → **Run workflow** → enable `firefox_integration`. That job fetches the official upstream commit and filter assets, runs one real Firefox comparison per build with a fresh profile, and uploads JSON evidence. It is not the five-run performance gate; run the full command locally for statistical comparisons. This CI integration job must be verified on a hosted runner before its results can be claimed.
 
 ## Safety and isolation
 
 - Source snapshots are created via `git archive` under ignored `dist/build/meblock-comparison`.
-- The probe, embedded dataset and the controlled filter rules in `tools/meblock/browser_fixtures.py` are injected identically into both disposable test packages. Nothing is added to source files or release packages. Build equivalence is checked **before** instrumentation.
+- The probe, its dedicated state module, embedded dataset and the controlled filter rules in `tools/meblock/browser_fixtures.py` are injected identically into both disposable test packages. Nothing is added to source files or release packages. Build equivalence is checked **before** instrumentation.
 - The HTTP collector listens on `127.0.0.1`, uses a random per-session token for uploads, bounds response size, and closes after execution.
-- Every Firefox session uses Selenium's temporary profile, preserving your personal Firefox profile. A Firefox-without-addon negative control first verifies that blocked targets really load in the absence of filters; each instrumented profile must then satisfy every expected page observation.
+- Every Firefox session uses Selenium's temporary profile, preserving your personal Firefox profile. A Firefox-without-addon negative control first verifies that blocked targets really load in the absence of filters; each instrumented profile must then satisfy every expected page observation. The state module changes only the disposable profile's `colorBlindFriendly` preference and a fixture-only firewall rule, reloads the extension, and verifies restoration.
 - The probe does not require privileged Marionette or `-remote-allow-system-access`.
 - Output includes potentially sensitive input URLs when it needs to explain a mismatch; keep reports private unless the dataset is sanitized.
 - Each test package keeps the Firefox extension ID from its source manifest. The runner verifies that Firefox installed that exact ID, so the fork may use a different ID after rebranding. Neither package is installed into your regular Firefox profile.
@@ -84,9 +86,9 @@ The script writes a separate dated session directory under `dist/build/meblock-c
 - `upstream/checkout/dist/build/build.log` and equivalent fork path: build logs.
 - `upstream/instrumented.xpi` and `meblock/instrumented.xpi`: diagnostic test packages, **not distributable releases**.
 
-Interpret results conservatively: five or more runs per build, same request corpus and list snapshots, alternating A/B order, and no behavior differences. If an observed timing difference is within the spread of individual measurements, the result is *inconclusive*. When both built trees are byte-identical, any apparent speedup is environmental noise, not a change attributable to meBlock.
+Interpret results conservatively: five or more runs per build for behavior smoke tests, and **at least 10 paired A/B runs** before classifying a timing difference as a candidate. The timing comparator reports each B/A ratio and a deterministic bootstrap 95% interval of the median log ratio, with a 3% practical-change threshold. The interval is exploratory, not a guarantee, and assumes comparable runs; repeat on realistic workloads and hardware. When both built trees are byte-identical, any apparent speedup is environmental noise, not a change attributable to meBlock.
 
-Do not claim improvement without evaluating performance profiles and realistic browsing workloads. A direct engine microbenchmark is only one component of total page-load cost.
+To evaluate a genuine modified build, run `python tools/meblock/compare_original.py --runs 10 --dataset dist/build/meblock-requests.json` with unchanged environment and real-world data. Do not claim improvement without evaluating performance profiles and realistic browsing workloads. A direct engine microbenchmark is only one component of total page-load cost.
 
 ### Verified control run, 2026-10-19
 
@@ -108,8 +110,32 @@ The Firefox build outputs were byte-identical before instrumentation.
 - Local evidence: `dist/build/meblock-comparison/20261019-005149-896a7f/report.json`.
 
 The synthetic corpus exists to exercise the pipeline. Realistic website replay,
-CNAME, dynamic filtering, settings persistence, and HTML response filtering are
-separate work not covered by this control run.
+CNAME, HTML response filtering, browser-level dynamic firewall behavior, settings
+across a full Firefox process restart, and extension-private memory accounting
+remain separate work.
+
+### Dynamic-firewall and extension-reload control, 2026-10-19
+
+Fixture version 3 was verified against upstream and meBlock in five paired
+sessions, using the same 10,000 synthetic requests per run. The test-only
+background probe changes the real `colorBlindFriendly` user setting, waits for
+persistent storage, calls `browser.runtime.reload()`, verifies the saved
+value after the extension is initialized again, and restores the original
+setting. Separately, it temporarily sets source-scoped firewall block, allow,
+noop and destination-override rules and verifies exact outputs and rollback.
+
+- All network decisions, six modifier masks, original browser behavior fixtures,
+  firewall state and settings reload/restore checks passed for both builds.
+- Both rebuilt extension bundles were byte-identical before instrumentation.
+- Median filtering cost: 15.80 µs/request upstream, 15.44 µs/request meBlock.
+- Paired median time change: −4.48%; exploratory paired bootstrap 95% interval:
+  **−19.58% to +41.46%**. Five pairs are insufficient to classify a timing
+  candidate, and these two extension bundles are identical, so this is
+  explicitly a **control run**, not a demonstrated optimization.
+- Local evidence: `dist/build/meblock-comparison/20261019-011526-fe15d2/report.json`.
+
+The engine-ready diagnostic is collected after the test-only extension reload,
+so it must **not** be interpreted as cold Firefox or extension startup time.
 
 ## Failure handling
 

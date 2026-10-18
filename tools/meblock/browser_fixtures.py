@@ -6,7 +6,17 @@ filter rules and expected observations form one versioned behavior contract.
 
 from base64 import b64decode
 
-FIXTURE_VERSION = 2
+FIXTURE_VERSION = 3
+
+DYNAMIC_FIREWALL_EXPECTED = {
+    "block": 1,
+    "allow": 2,
+    "noop": 3,
+    "destination_override": 2,
+}
+
+STATE_PERSISTENCE_KEY = "colorBlindFriendly"
+
 
 RULES = (
     "||127.0.0.1^*test-blocked.js$script",
