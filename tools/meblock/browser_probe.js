@@ -81,6 +81,7 @@ async function main() {
     }
 
     const outcomes = [];
+    const modifierMasks = [];
     let blocked = 0;
     let allowed = 0;
     for (const row of data) {
@@ -90,6 +91,24 @@ async function main() {
         if (decision === 1) { blocked += 1; }
         if (decision === 2) { allowed += 1; }
         outcomes.push(decision);
+
+        // Same modifier calls as upstream's benchmark, outside the timed loop.
+        let mask = 0;
+        if (decision !== 1) {
+            if (sfne.transformURL(fctxt)) { mask |= 1; }
+            if (sfne.hasQuery(fctxt) && sfne.filterQuery(fctxt)) { mask |= 2; }
+            if (sfne.urlSkip(fctxt, false)) { mask |= 4; }
+            if (fctxt.isDocument()) {
+                if (sfne.matchAndFetchModifiers(fctxt, 'csp')) { mask |= 8; }
+                if (sfne.matchAndFetchModifiers(fctxt, 'permissions')) { mask |= 16; }
+            }
+            sfne.matchHeaders(fctxt, [], []);
+            if (sfne.matchAndFetchModifiers(fctxt, 'replace')) { mask |= 32; }
+        } else {
+            if (sfne.redirectRequest(redirectEngine, fctxt)) { mask |= 1; }
+            if (fctxt.isRootDocument() && sfne.urlSkip(fctxt, true)) { mask |= 4; }
+        }
+        modifierMasks.push(mask);
     }
     const elapsed = elapsedPerPass.reduce((total, ms) => total + ms, 0);
     await report({
@@ -101,6 +120,7 @@ async function main() {
         engine_match_ms: elapsed,
         us_per_request: elapsed * 1000 / (data.length * timedPasses),
         outcomes,
+        modifier_masks: modifierMasks,
         decisions: { blocked, allowed, passed: data.length - blocked - allowed },
         official,
         extra,

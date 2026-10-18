@@ -21,10 +21,14 @@ import tarfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import threading
 import time
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from benchmark_firefox import collect_idle, geckodriver_path
+from browser_fixtures import (
+    FIXTURE_VERSION, OBSERVATION_SCRIPT, ROUTES, RULES, WITH_ADDON, WITHOUT_ADDON,
+    PARAMETERS_WITH_ADDON, PARAMETERS_WITHOUT_ADDON,
+)
 from filtering_benchmark import parse_report_text, valid_rows
 
 from selenium import webdriver
@@ -109,7 +113,7 @@ def probe_package(build, destination, role, endpoint, token, dataset_bytes):
     if not core_filters.is_file():
         raise RuntimeError("Built-in filter list missing for browser behavior fixture")
     with core_filters.open("a", encoding="utf-8") as stream:
-        stream.write("\n||127.0.0.1^*test-blocked.js$script\n")
+        stream.write("\n" + "\n".join(RULES) + "\n")
     text = PROBE_PATH.read_text(encoding="utf-8")
     if "__MEBLOCK_CONFIG__" not in text:
         raise RuntimeError("Probe configuration placeholder not found")
@@ -198,18 +202,9 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/dataset":
             return self.respond(200, self.server.state.dataset)
-        if path == "/fixture":
-            html = (
-                '<!doctype html><html><body>'
-                '<script src="/test-allowed.js"></script>'
-                '<script src="/test-blocked.js"></script>'
-                '</body></html>'
-            )
-            return self.respond(200, html.encode(), "text/html; charset=utf-8")
-        if path in ("/test-allowed.js", "/test-blocked.js"):
-            value = "allowed" if path == "/test-allowed.js" else "blocked"
-            script = f"window.__meblock_{value} = true;"
-            return self.respond(200, script.encode(), "application/javascript")
+        if path in ROUTES:
+            content_type, body = ROUTES[path]
+            return self.respond(200, body, content_type)
         self.respond(404)
 
     def do_POST(self):
@@ -229,6 +224,49 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(200, b'{"ok":true}')
         except (ValueError, TypeError, json.JSONDecodeError):
             self.respond(400)
+
+
+def observe_page(browser, endpoint, expected):
+    observed = None
+    for attempt in range(3):
+        browser.get(endpoint + f"/fixture?attempt={attempt}")
+        for _ in range(16):
+            observed = browser.execute_script(OBSERVATION_SCRIPT)
+            if observed == expected:
+                return observed
+            time.sleep(0.25)
+    return observed
+
+
+def observe_parameters(browser, endpoint):
+    browser.get(endpoint + "/fixture-params?utm_source=remove&keep=one")
+    current = urlsplit(browser.current_url)
+    query = parse_qs(current.query)
+    return {
+        "tracking_parameter_present": "utm_source" in query,
+        "keep_parameter_preserved": query.get("keep") == ["one"],
+        "fixture_path_correct": current.path == "/fixture-params",
+    }
+
+
+def test_without_addon(endpoint, driver_binary, firefox_binary):
+    options = Options()
+    options.binary_location = str(firefox_binary)
+    options.add_argument("-headless")
+    service = Service(executable_path=driver_binary) if driver_binary else Service()
+    browser = webdriver.Firefox(options=options, service=service)
+    try:
+        observed = observe_page(browser, endpoint, WITHOUT_ADDON)
+        if observed != WITHOUT_ADDON:
+            raise RuntimeError(
+                f"Unfiltered fixture control did not load all resources: {observed}"
+            )
+        parameters = observe_parameters(browser, endpoint)
+        if parameters != PARAMETERS_WITHOUT_ADDON:
+            raise RuntimeError(f"Unfiltered parameter control failed: {parameters}")
+        return {"page": observed, "parameters": parameters}
+    finally:
+        browser.quit()
 
 
 def firefox_run(xpi, role, state, driver_binary, firefox_binary,
@@ -258,19 +296,20 @@ def firefox_run(xpi, role, state, driver_binary, firefox_binary,
         result["addon_id_verified"] = True
         result["firefox_version"] = browser.capabilities.get("browserVersion")
         result.pop("token", None)
-        observed = None
-        for attempt in range(3):
-            browser.get(endpoint + f"/fixture?attempt={attempt}")
-            observed = browser.execute_script(
-                "return {allowed: window.__meblock_allowed === true, "
-                "blocked: window.__meblock_blocked === true}"
-            )
-            if observed == {"allowed": True, "blocked": False}:
-                break
-            time.sleep(0.5)
+        observed = observe_page(browser, endpoint, WITH_ADDON)
         result["browser_behavior"] = observed
-        if observed != {"allowed": True, "blocked": False}:
-            raise RuntimeError(f"Firefox page fixture failed blocking control: {observed}")
+        if observed != WITH_ADDON:
+            differing = {
+                name: {"expected": expected, "actual": observed.get(name)}
+                for name, expected in WITH_ADDON.items()
+                if observed.get(name) != expected
+            }
+            raise RuntimeError(f"Firefox behavior regression: {differing}")
+        result["browser_parameters"] = observe_parameters(browser, endpoint)
+        if result["browser_parameters"] != PARAMETERS_WITH_ADDON:
+            raise RuntimeError(
+                f"Firefox URL-modification regression: {result['browser_parameters']}"
+            )
         if idle_sample:
             result["idle_process_sample"] = collect_idle(
                 browser.service.process.pid, idle_sample
@@ -282,23 +321,41 @@ def firefox_run(xpi, role, state, driver_binary, firefox_binary,
 
 def check_behavior(upstream, meblock, dataset):
     baseline = upstream[0]["outcomes"]
+    baseline_modifiers = upstream[0].get("modifier_masks")
+    if not isinstance(baseline_modifiers, list) or len(baseline_modifiers) != len(dataset):
+        raise ValueError("Reference run lacks complete modifier vector")
     problems = []
+    modifier_problems = []
     for label, series in (("upstream", upstream), ("meblock", meblock)):
         for index, record in enumerate(series):
             vector = record.get("outcomes")
+            modifiers = record.get("modifier_masks")
             if not isinstance(vector, list) or len(vector) != len(dataset):
                 raise ValueError(f"{label} run {index} lacks complete decision vector")
+            if not isinstance(modifiers, list) or len(modifiers) != len(dataset):
+                raise ValueError(f"{label} run {index} lacks complete modifier vector")
+            if any(type(mask) is not int or not 0 <= mask <= 63 for mask in modifiers):
+                raise ValueError(f"{label} run {index} contains invalid modifier mask")
             for offset, (a, b) in enumerate(zip(baseline, vector)):
-                if a != b:
-                    if len(problems) < 25:
-                        problems.append({
-                            "role": label, "run": index + 1, "request_index": offset,
-                            "reference": a, "observed": b, "request": dataset[offset],
-                        })
+                if a != b and len(problems) < 25:
+                    problems.append({
+                        "role": label, "run": index + 1, "request_index": offset,
+                        "reference": a, "observed": b, "request": dataset[offset],
+                    })
+            for offset, (a, b) in enumerate(zip(baseline_modifiers, modifiers)):
+                if a != b and len(modifier_problems) < 25:
+                    modifier_problems.append({
+                        "role": label, "run": index + 1, "request_index": offset,
+                        "reference_mask": a, "observed_mask": b,
+                        "request": dataset[offset],
+                    })
     return {
         "per_request_match": not problems,
         "mismatches_first_25": problems,
+        "modifier_per_request_match": not modifier_problems,
+        "modifier_mismatches_first_25": modifier_problems,
         "checked_requests_per_run": len(baseline),
+        "checked_modifier_masks_per_run": len(baseline_modifiers),
     }
 
 
@@ -339,6 +396,17 @@ def compare(data, dataset, identical_build=False):
             )):
                 raise ValueError(f"{label} official benchmark and behavior counts disagree")
             aggregate_signatures.append(official[0]["counts"])
+            modifier_bits = {
+                "redirect": 1, "removeparam": 2, "urlskip": 4,
+                "csp": 8, "permissions": 16, "replace": 32,
+            }
+            for name, bit in modifier_bits.items():
+                actual = sum(bool(mask & bit) for mask in row["modifier_masks"])
+                if actual != official[0]["counts"][name]:
+                    raise ValueError(
+                        f"{label} {name} per-request modifier counts disagree with upstream benchmark "
+                        f"(observed={actual}, expected={official[0]['counts'][name]})"
+                    )
             auxiliary = {}
             if documents:
                 for kind in ('cosmetic', 'scriptlet'):
@@ -356,18 +424,26 @@ def compare(data, dataset, identical_build=False):
     )
     behavior["reference_aggregate_counts"] = aggregate_signatures[0]
     browser_pages = [row.get("browser_behavior") for role in ROLES for row in data[role]]
-    expected_page = {"allowed": True, "blocked": False}
+    expected_page = WITH_ADDON
     behavior["browser_page_probe_ran"] = all(isinstance(page, dict) for page in browser_pages)
     behavior["browser_page_match"] = all(page == expected_page for page in browser_pages)
     behavior["local_block_positive_control"] = behavior["browser_page_match"]
+    url_parameters = [
+        row.get("browser_parameters") for role in ROLES for row in data[role]
+    ]
+    behavior["url_modifier_match"] = all(
+        parameters == PARAMETERS_WITH_ADDON for parameters in url_parameters
+    )
     filters = [row.get("selected_filter_lists") for role in ROLES for row in data[role]]
     behavior["filter_list_selection_match"] = (
         None if all(value is None for value in filters)
         else all(isinstance(value, list) and value == filters[0] for value in filters)
     )
     left, right = summarize_role(a), summarize_role(b)
-    matching = (behavior["per_request_match"] and behavior["aggregate_modifier_counts_match"]
+    matching = (behavior["per_request_match"] and behavior["modifier_per_request_match"]
+                and behavior["aggregate_modifier_counts_match"]
                 and behavior["auxiliary_benchmarks_match"] and behavior["browser_page_match"]
+                and behavior["url_modifier_match"]
                 and behavior["filter_list_selection_match"] is not False)
     noise = max(left["range_us_per_request"][1] - left["range_us_per_request"][0],
                 right["range_us_per_request"][1] - right["range_us_per_request"][0])
@@ -440,6 +516,14 @@ def main():
         "status": "incomplete", "session": str(session_dir),
         "refs": hashes, "assets": assets_hashes,
         "dataset_sha256": hash_bytes(raw), "dataset_count": len(dataset),
+        "fixture_version": FIXTURE_VERSION,
+        "harness_files_sha256": {
+            name: hash_file(Path(__file__).with_name(name))
+            for name in (
+                "compare_original.py", "browser_probe.js", "browser_fixtures.py",
+                "benchmark_firefox.py", "filtering_benchmark.py",
+            )
+        },
         "runs_per_build": args.runs, "steps": [], "test_only_probe": True,
         "working_tree_dirty": bool(dirty_paths),
         "note": "Both source snapshots are exported from resolved commits, not the working tree.",
@@ -470,6 +554,10 @@ def main():
             return 0
         data = {role: [] for role in ROLES}
         driver_path = geckodriver_path(None)
+        metadata["unfiltered_fixture_control"] = test_without_addon(
+            endpoint, driver_path, args.firefox
+        )
+        metadata["steps"].append("Firefox without-addon negative control passed")
         for iteration in range(args.runs):
             for role in (ROLES if iteration % 2 == 0 else tuple(reversed(ROLES))):
                 print(f"[{iteration + 1}/{args.runs}] {role} Firefox run", flush=True)

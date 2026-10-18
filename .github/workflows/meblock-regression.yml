@@ -13,6 +13,12 @@ on:
       - "tools/meblock/**"
       - "docs/meblock-comparison.md"
   workflow_dispatch:
+    inputs:
+      firefox_integration:
+        description: "Run the real Firefox integration comparison (slower)"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -36,3 +42,53 @@ jobs:
         run: node --check tools/meblock/browser_probe.js
       - name: Generate deterministic request corpus
         run: python tools/meblock/filtering_benchmark.py synthetic --count 1000 --seed 20261018 --out dist/build/ci-requests.json
+
+  firefox-integration:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.firefox_integration }}
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out Git history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Configure Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install benchmark dependencies
+        run: python -m pip install "selenium>=4.30,<5" "psutil>=6,<9"
+      - name: Resolve Firefox
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'C:\Program Files\Mozilla Firefox\firefox.exe')) {
+            choco install firefox -y --no-progress
+          }
+          if (-not (Test-Path 'C:\Program Files\Mozilla Firefox\firefox.exe')) {
+            throw 'Firefox binary could not be found or installed'
+          }
+      - name: Fetch exact original upstream source
+        shell: pwsh
+        run: |
+          git remote add upstream https://github.com/gorhill/uBlock.git
+          git fetch --no-tags --depth=1 upstream master
+          git rev-parse upstream/master
+      - name: Fetch uBlock filter assets
+        shell: pwsh
+        run: |
+          & 'C:\Program Files\Git\bin\bash.exe' -lc 'bash tools/pull-assets.sh'
+          if ($LASTEXITCODE -ne 0) { throw 'uAssets checkout failed' }
+      - name: Generate isolated Firefox corpus
+        run: python tools/meblock/filtering_benchmark.py synthetic --count 1500 --seed 20261018 --out dist/build/ci-browser-requests.json
+      - name: Compare real Firefox builds
+        run: python tools/meblock/compare_original.py --dataset dist/build/ci-browser-requests.json --runs 1 --timeout 180
+      - name: Save regression evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firefox-regression-evidence
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            dist/build/meblock-comparison/**/report.json
+            dist/build/meblock-comparison/**/*-run-*.json
