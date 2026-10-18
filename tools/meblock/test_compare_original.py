@@ -32,6 +32,7 @@ def make_run(outcomes=None, speed=7):
     blocked = sum(v == 1 for v in outcomes)
     return {
         "outcomes": outcomes, "us_per_request": speed,
+        "browser_behavior": {"allowed": True, "blocked": False},
         "dataset_rows": 3, "official": official(blocked),
         "decisions": {
             "blocked": blocked, "allowed": 0,
@@ -101,6 +102,28 @@ class CompareTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "scriptlet benchmark"):
             runner.compare(data, dataset)
 
+    def test_browser_fixture_fails_if_control_is_not_blocked(self):
+        data = {
+            "upstream": [make_run() for _ in range(5)],
+            "meblock": [make_run() for _ in range(5)],
+        }
+        data["meblock"][0]["browser_behavior"]["blocked"] = True
+        report = runner.compare(data, DATASET)
+        self.assertEqual(report["verdict"], "FAIL: behavioral regression")
+        self.assertFalse(report["correctness"]["browser_page_match"])
+
+    def test_filter_list_selection_change_is_regression(self):
+        data = {
+            "upstream": [make_run() for _ in range(5)],
+            "meblock": [make_run() for _ in range(5)],
+        }
+        for role in ("upstream", "meblock"):
+            for row in data[role]:
+                row["selected_filter_lists"] = ["ublock-filters"]
+        data["meblock"][0]["selected_filter_lists"] = ["different-list"]
+        report = runner.compare(data, DATASET)
+        self.assertEqual(report["verdict"], "FAIL: behavioral regression")
+
     def test_incorrect_upstream_report_rejected(self):
         data = {
             "upstream": [make_run() for _ in range(5)],
@@ -129,6 +152,10 @@ class CollectorTests(unittest.TestCase):
             for path in ("/dataset", "/dataset?_=8"):
                 with urllib.request.urlopen(endpoint + path, timeout=5) as result:
                     self.assertEqual(result.read(), b'[]')
+            with urllib.request.urlopen(endpoint + "/fixture", timeout=5) as response:
+                self.assertIn(b"/test-blocked.js", response.read())
+            with urllib.request.urlopen(endpoint + "/test-allowed.js", timeout=5) as response:
+                self.assertIn(b"__meblock_allowed = true", response.read())
             body = json.dumps({"token": "correct-secret", "role": "upstream", "status": "ok"}).encode()
             request = urllib.request.Request(
                 endpoint + "/result", data=body,

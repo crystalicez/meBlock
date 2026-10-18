@@ -109,7 +109,7 @@ def probe_package(build, destination, role, endpoint, token, dataset_bytes):
     if not core_filters.is_file():
         raise RuntimeError("Built-in filter list missing for browser behavior fixture")
     with core_filters.open("a", encoding="utf-8") as stream:
-        stream.write("\n||127.0.0.1^/test-blocked.js$script\n")
+        stream.write("\n||127.0.0.1^*test-blocked.js$script\n")
     text = PROBE_PATH.read_text(encoding="utf-8")
     if "__MEBLOCK_CONFIG__" not in text:
         raise RuntimeError("Probe configuration placeholder not found")
@@ -138,7 +138,11 @@ def probe_package(build, destination, role, endpoint, token, dataset_bytes):
         manifest = json.loads(archive.read("manifest.json"))
         if not manifest["browser_specific_settings"]["gecko"]["id"]:
             raise RuntimeError("Missing addon identity")
-    return {"bytes": destination.stat().st_size, "sha256": hash_file(destination)}
+    return {
+        "bytes": destination.stat().st_size,
+        "sha256": hash_file(destination),
+        "addon_id": manifest["browser_specific_settings"]["gecko"]["id"],
+    }
 
 
 class State:
@@ -228,7 +232,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def firefox_run(xpi, role, state, driver_binary, firefox_binary,
-                timeout, idle_sample):
+                timeout, idle_sample, endpoint, expected_addon_id):
     options = Options()
     options.binary_location = str(firefox_binary)
     options.add_argument("-headless")
@@ -252,7 +256,21 @@ def firefox_run(xpi, role, state, driver_binary, firefox_binary,
         if result.get("engine_ready") is not True:
             raise RuntimeError("Benchmark ran without filtering readiness")
         result["addon_id_verified"] = True
+        result["firefox_version"] = browser.capabilities.get("browserVersion")
         result.pop("token", None)
+        observed = None
+        for attempt in range(3):
+            browser.get(endpoint + f"/fixture?attempt={attempt}")
+            observed = browser.execute_script(
+                "return {allowed: window.__meblock_allowed === true, "
+                "blocked: window.__meblock_blocked === true}"
+            )
+            if observed == {"allowed": True, "blocked": False}:
+                break
+            time.sleep(0.5)
+        result["browser_behavior"] = observed
+        if observed != {"allowed": True, "blocked": False}:
+            raise RuntimeError(f"Firefox page fixture failed blocking control: {observed}")
         if idle_sample:
             result["idle_process_sample"] = collect_idle(
                 browser.service.process.pid, idle_sample
@@ -286,12 +304,21 @@ def check_behavior(upstream, meblock, dataset):
 
 def summarize_role(series):
     values = [row["us_per_request"] for row in series]
-    return {
+    summary = {
         "runs": len(values),
         "median_us_per_request": round(statistics.median(values), 5),
         "range_us_per_request": [round(min(values), 5), round(max(values), 5)],
         "individual_us_per_request": [round(v, 5) for v in values],
     }
+    ready = []
+    for row in series:
+        match = re.match(r"^(\d+) ms", str(row.get("engine_ready_after", "")))
+        if match:
+            ready.append(int(match.group(1)))
+    if len(ready) == len(series):
+        summary["extension_engine_ready_median_ms"] = statistics.median(ready)
+        summary["extension_engine_ready_range_ms"] = [min(ready), max(ready)]
+    return summary
 
 
 def compare(data, dataset, identical_build=False):
@@ -328,9 +355,20 @@ def compare(data, dataset, identical_build=False):
         signature == aggregate_signatures[0] for signature in aggregate_signatures
     )
     behavior["reference_aggregate_counts"] = aggregate_signatures[0]
+    browser_pages = [row.get("browser_behavior") for role in ROLES for row in data[role]]
+    expected_page = {"allowed": True, "blocked": False}
+    behavior["browser_page_probe_ran"] = all(isinstance(page, dict) for page in browser_pages)
+    behavior["browser_page_match"] = all(page == expected_page for page in browser_pages)
+    behavior["local_block_positive_control"] = behavior["browser_page_match"]
+    filters = [row.get("selected_filter_lists") for role in ROLES for row in data[role]]
+    behavior["filter_list_selection_match"] = (
+        None if all(value is None for value in filters)
+        else all(isinstance(value, list) and value == filters[0] for value in filters)
+    )
     left, right = summarize_role(a), summarize_role(b)
     matching = (behavior["per_request_match"] and behavior["aggregate_modifier_counts_match"]
-                and behavior["auxiliary_benchmarks_match"])
+                and behavior["auxiliary_benchmarks_match"] and behavior["browser_page_match"]
+                and behavior["filter_list_selection_match"] is not False)
     noise = max(left["range_us_per_request"][1] - left["range_us_per_request"][0],
                 right["range_us_per_request"][1] - right["range_us_per_request"][0])
     delta = right["median_us_per_request"] - left["median_us_per_request"]
@@ -437,7 +475,7 @@ def main():
                 print(f"[{iteration + 1}/{args.runs}] {role} Firefox run", flush=True)
                 result = firefox_run(
                     builds[role], role, state, driver_path,
-                    args.firefox, args.timeout, args.idle_sample,
+                    args.firefox, args.timeout, args.idle_sample, endpoint,
                 )
                 data[role].append(result)
                 print(json.dumps({

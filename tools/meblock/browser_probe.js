@@ -105,6 +105,8 @@ async function main() {
         official,
         extra,
         engine_ready: µb.readyToFilter,
+        engine_ready_after: µb.supportStats.allReadyAfter,
+        selected_filter_lists: Array.from(µb.selectedFilterLists).sort(),
         manifest: browser.runtime.getManifest().version,
     });
 }

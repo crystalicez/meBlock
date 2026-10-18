@@ -49,22 +49,26 @@ Those process-wide readings are secondary diagnostics, not reliable per-extensio
 
 | Gate | Check | Interpretation |
 | --- | --- | --- |
-| Git and assets | Exact commit hashes, asset revisions, dataset SHA-256 | Same inputs across both builds |
+| Git and assets | Exact commit hashes, asset revisions, dataset SHA-256 and selected filter-list keys | Detect mismatched inputs across both builds |
 | Build regression | Both Firefox builds must succeed; resulting file hashes are compared | All modified bundled files are visible |
 | Runtime | Separate Firefox profiles, installed addon ID and filter engine readiness | Code actually ran in Firefox |
 | Original benchmark | Calls `benchmarkStaticNetFiltering` in both builds | Verifies upstream's engine benchmark completes |
 | Behavior regression | Full decision vector plus upstream modifier counts | **Every request's block/allow/passthrough result must match**, including unchanged aggregate redirect, removeparam, CSP and other modifier counts |
+| Browser behavior fixture | Load a local page with one allowed and one deliberately filtered script | Both builds must allow the expected script and block the other in Firefox's real request pipeline |
 | Built-in extra benchmarks | Cosmetic and scriptlet benchmarking where dataset contains document requests | Separate diagnostic timings |
 | Performance | Two in-session warm-ups and five measured engine passes, repeated across alternating A/B sessions | Median, range, noise floor, byte-identical control verdict and conservative comparison |
+| Startup diagnostics | Extension-reported engine-ready time, when available | Recorded separately from filtering speed; not browser startup overhead |
 | Firefox processes | Optional idle CPU time and summed RSS after benchmark | Diagnostic only; not per-extension attribution |
 | Offline tests | `python -m unittest discover -s tools/meblock -p test_*.py -v` | Catches regressions in the harness and comparator |
 
-**Coverage limits:** A matching direct network-filter decision vector does not prove complete browser-level behavior. Redirect, URL modification, CNAME, dynamic firewall, cosmetic application, and scriptlet effects still need dedicated behavioral fixtures and end-to-end tests. The upstream cosmetic/scriptlet helpers expose only aggregate benchmark timings. Synthetic datasets do not establish real-world performance.
+**Coverage limits:** The local-page fixture tests basic real-world script blocking but does not exercise every browser API. A matching direct network-filter decision vector does not prove complete browser-level behavior. Redirect, URL modification, CNAME, dynamic firewall, cosmetic application, and scriptlet effects still need dedicated behavioral fixtures and end-to-end tests. The upstream cosmetic/scriptlet helpers expose only aggregate benchmark timings. Synthetic datasets do not establish real-world performance.
+
+The GitHub workflow `.github/workflows/meblock-regression.yml` runs Python unit regression tests, JavaScript syntax validation and a deterministic dataset generator on Windows. It does **not** claim to run Firefox engine integration tests in CI; those need an available Firefox installation and pinned filter assets.
 
 ## Safety and isolation
 
 - Source snapshots are created via `git archive` under ignored `dist/build/meblock-comparison`.
-- The probe and its loopback-only result collector are injected only into generated test packages, never into source files or release packages.
+- The probe, embedded dataset and a local-only `test-blocked.js` filter rule are injected into both generated test packages, never into source files or release packages. This controlled rule is excluded from the clean-build file comparison.
 - The HTTP collector listens on `127.0.0.1`, uses a random per-session token for uploads, bounds response size, and closes after execution.
 - Every Firefox session uses Selenium's temporary profile, preserving your personal Firefox profile.
 - The probe does not require privileged Marionette or `-remote-allow-system-access`.
