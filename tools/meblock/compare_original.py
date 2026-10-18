@@ -249,8 +249,8 @@ def firefox_run(xpi, role, state, driver_binary, firefox_binary,
     try:
         reported_id = browser.install_addon(str(xpi.resolve()), temporary=True)
         result = state.wait(role, timeout)
-        if reported_id != "uBlock0@raymondhill.net":
-            raise RuntimeError(f"Unexpected upstream test addon ID {reported_id!r}")
+        if reported_id != expected_addon_id:
+            raise RuntimeError(f"Unexpected test addon ID {reported_id!r}, expected {expected_addon_id!r}")
         if result.get("status") != "ok":
             raise RuntimeError(result.get("message", "Firefox benchmark failed") + "\n" + result.get("stack", ""))
         if result.get("engine_ready") is not True:
@@ -476,6 +476,7 @@ def main():
                 result = firefox_run(
                     builds[role], role, state, driver_path,
                     args.firefox, args.timeout, args.idle_sample, endpoint,
+                    packages[role]["addon_id"],
                 )
                 data[role].append(result)
                 print(json.dumps({

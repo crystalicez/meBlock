@@ -73,7 +73,7 @@ The GitHub workflow `.github/workflows/meblock-regression.yml` runs Python unit 
 - Every Firefox session uses Selenium's temporary profile, preserving your personal Firefox profile.
 - The probe does not require privileged Marionette or `-remote-allow-system-access`.
 - Output includes potentially sensitive input URLs when it needs to explain a mismatch; keep reports private unless the dataset is sanitized.
-- The original Firefox extension ID is intentionally left unchanged **in these isolated test builds only**. MeBlock releases require their own name and ID.
+- Each test package keeps the Firefox extension ID from its source manifest. The runner verifies that Firefox installed that exact ID, so the fork may use a different ID after rebranding. Neither package is installed into your regular Firefox profile.
 
 ## Results
 

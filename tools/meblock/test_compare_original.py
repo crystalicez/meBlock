@@ -7,6 +7,7 @@ import tempfile
 import threading
 import urllib.request
 import unittest
+from zipfile import ZipFile
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("compare_original", HERE / "compare_original.py")
@@ -139,6 +140,36 @@ class CompareTests(unittest.TestCase):
 
     def test_source_delta(self):
         self.assertEqual(runner.source_delta({"a": "1"}, {"a": "2", "b": "3"})["files_different"], 2)
+
+
+class PackageTests(unittest.TestCase):
+    def test_instrumented_package_tracks_fork_identity(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "build"
+            (root / "assets" / "ublock").mkdir(parents=True)
+            (root / "js").mkdir()
+            (root / "manifest.json").write_text(
+                json.dumps({"browser_specific_settings": {
+                    "gecko": {"id": "meblock@example.invalid"}
+                }}), encoding="utf-8"
+            )
+            (root / "background.html").write_text(
+                "<html><body></body></html>", encoding="utf-8"
+            )
+            (root / "assets" / "ublock" / "filters.min.txt").write_text(
+                "! test baseline\n", encoding="utf-8"
+            )
+            xpi = Path(folder) / "instrumented.xpi"
+            result = runner.probe_package(
+                root, xpi, "meblock", "http://127.0.0.1:8888", "test-token", b"[]"
+            )
+            self.assertEqual(result["addon_id"], "meblock@example.invalid")
+            with ZipFile(xpi) as archive:
+                self.assertEqual(archive.read("assets/meblock-requests.json"), b"[]")
+                self.assertIn(b"meblock-probe.js", archive.read("background.html"))
+                self.assertIn(
+                    b"test-blocked.js", archive.read("assets/ublock/filters.min.txt")
+                )
 
 
 class CollectorTests(unittest.TestCase):
