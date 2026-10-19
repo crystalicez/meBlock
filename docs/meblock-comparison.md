@@ -59,11 +59,38 @@ Those process-wide readings are secondary diagnostics, not reliable per-extensio
 | Settings reload and restore | Toggle real `colorBlindFriendly` user setting, persist, reload disposable extension, then restore | Fails if persisted value does not survive the reload or cannot be restored |
 | Built-in extra benchmarks | Cosmetic and scriptlet benchmarking where dataset contains document requests | Separate diagnostic timings |
 | Performance | Two in-session warm-ups and five measured engine passes, repeated across alternating A/B sessions | Median and range, per-pair percentage change, paired bootstrap interval, byte-identical control verdict; at least 10 A/B pairs required for a timing candidate |
+| Local page navigation p95 | Two warm-up and 20 measured loopback fixture navigations per Firefox session, checked against the complete expected browser behavior | Firefox `loadEventEnd` and DOMContentLoaded p95, with strict sample validation. Includes browser overhead and is not real-site or request-level p95 |
 | Startup diagnostics | Extension-reported engine-ready time, when available | Recorded separately from filtering speed; not browser startup overhead |
 | Firefox processes | Optional idle CPU time and summed RSS after benchmark | Diagnostic only; not per-extension attribution |
 | Offline tests | `python -m unittest discover -s tools/meblock -p test_*.py -v` | Catches regressions in the harness and comparator |
 
 **Coverage limits:** These fixtures exercise selected network and page-side effects and the internal session firewall state. Browser-wide dynamic-firewall blocking, CNAME uncloaking, HTML filtering, filter subscriptions, persistence across a full Firefox process restart, large-page behavior, all redirect resources, advanced scriptlets and private memory attribution require separate tests. The settings check exercises persistence across **extension reload**, not process restart. The upstream cosmetic/scriptlet microbenchmarks still expose only aggregate timings. Synthetic datasets do not establish real-user speedups.
+
+## Controlled Firefox page navigation p95
+
+The Firefox integration runner now measures a synthetic loopback page in
+addition to static network matcher speed. After engine readiness and a
+successful browser-behavior check, each fresh Firefox profile opens the same
+fixture for **two warm-ups and 20 measured navigations**. It reads
+`PerformanceNavigationTiming.loadEventEnd` and
+`domContentLoadedEventEnd` inside Firefox. This avoids including Selenium
+command transit time in the timed value. The runner checks the page's blocked
+script, image, frame, CSS and scriptlet outcomes after **every** navigation.
+Missing timing entries, incorrect page behavior, incomplete sample sets,
+non-finite values and reversed timing milestones fail the run.
+
+Each run preserves only numeric navigation milestones, not page URLs. The
+comparison recomputes median, **nearest-rank p95** and observed range from
+all 20 samples per run, then reports the median and range of per-run p95
+under `comparison.fixture_navigation`. Use several independent,
+alternating Firefox profiles to compare two versions. One run is diagnostic,
+not a performance verdict. A same-build comparison is a negative control.
+
+This is **local fixture page-load latency**, which includes browser,
+extension and controlled loopback server work. It is *not* actual request
+handler p95, public-website latency, a representative user browsing
+distribution or a claim of faster page loads. Real-site traces and
+request-level tail latency are still separate acceptance gates.
 
 ## Fast network-engine buffer screening
 

@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import io
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -248,6 +249,75 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(400)
 
 
+NAVIGATION_WARMUP = 2
+NAVIGATION_SAMPLES = 20
+NAVIGATION_SCRIPT = """
+const entry = performance.getEntriesByType('navigation')[0];
+if (!entry) { return null; }
+return {
+    load_event_end_ms: entry.loadEventEnd,
+    dom_content_loaded_end_ms: entry.domContentLoadedEventEnd,
+    navigation_type: entry.type,
+};
+"""
+
+
+def nearest_rank(values, percentile):
+    ordered = sorted(values)
+    return ordered[math.ceil(percentile * len(ordered)) - 1]
+
+
+def summarize_fixture_navigation(samples):
+    if not isinstance(samples, list) or len(samples) != NAVIGATION_SAMPLES:
+        raise ValueError("Fixture navigation requires exactly 20 measured loads")
+    for sample in samples:
+        if not isinstance(sample, dict) or set(sample) != {
+            "load_event_end_ms", "dom_content_loaded_end_ms"
+        }:
+            raise ValueError("Incomplete fixture navigation timing sample")
+        load = sample["load_event_end_ms"]
+        dom = sample["dom_content_loaded_end_ms"]
+        if (type(load) not in (int, float) or type(dom) not in (int, float)
+            or not math.isfinite(load) or not math.isfinite(dom)
+            or not 0 < dom <= load):
+            raise ValueError("Invalid browser navigation milestone order")
+    load_times = [sample["load_event_end_ms"] for sample in samples]
+    dom_times = [sample["dom_content_loaded_end_ms"] for sample in samples]
+    return {
+        "sample_count": len(samples),
+        "warmup_navigations": NAVIGATION_WARMUP,
+        "p50_load_event_end_ms": round(statistics.median(load_times), 3),
+        "p95_load_event_end_ms": round(nearest_rank(load_times, 0.95), 3),
+        "range_load_event_end_ms": [round(min(load_times), 3), round(max(load_times), 3)],
+        "p95_dom_content_loaded_end_ms": round(nearest_rank(dom_times, 0.95), 3),
+        "scope": "loopback fixture document navigation, not real-world request-level p95",
+    }
+
+
+def measure_fixture_navigation(browser, endpoint, expected):
+    records = []
+    for index in range(NAVIGATION_WARMUP + NAVIGATION_SAMPLES):
+        browser.get(endpoint + f"/fixture?navigation_trial={index}")
+        timing = browser.execute_script(NAVIGATION_SCRIPT)
+        if not isinstance(timing, dict) or timing.get("navigation_type") != "navigate":
+            raise RuntimeError("Firefox navigation performance entry missing or not a navigation")
+        observed = browser.execute_script(OBSERVATION_SCRIPT)
+        for _ in range(12):
+            if observed == expected:
+                break
+            time.sleep(0.05)
+            observed = browser.execute_script(OBSERVATION_SCRIPT)
+        if observed != expected:
+            raise RuntimeError("Fixture behavior changed during navigation timing")
+        if index >= NAVIGATION_WARMUP:
+            records.append({
+                "load_event_end_ms": timing.get("load_event_end_ms"),
+                "dom_content_loaded_end_ms": timing.get("dom_content_loaded_end_ms"),
+            })
+    summarize_fixture_navigation(records)
+    return records
+
+
 def observe_page(browser, endpoint, expected):
     observed = None
     for attempt in range(3):
@@ -332,6 +402,9 @@ def firefox_run(xpi, role, state, driver_binary, firefox_binary,
             raise RuntimeError(
                 f"Firefox URL-modification regression: {result['browser_parameters']}"
             )
+        result["fixture_navigation"] = measure_fixture_navigation(
+            browser, endpoint, WITH_ADDON
+        )
         if idle_sample:
             result["idle_process_sample"] = collect_idle(
                 browser.service.process.pid, idle_sample
@@ -516,6 +589,35 @@ def compare(data, dataset, identical_build=False):
         else all(isinstance(value, list) and value == filters[0] for value in filters)
     )
     left, right = summarize_role(a), summarize_role(b)
+    navigation_series = {
+        label: [row.get("fixture_navigation") for row in data[label]]
+        for label in ROLES
+    }
+    if any(samples is not None for values in navigation_series.values() for samples in values):
+        navigation_summaries = {
+            label: [summarize_fixture_navigation(samples) for samples in values]
+            for label, values in navigation_series.items()
+        }
+        fixture_navigation = {
+            label: {
+                "runs": len(summaries),
+                "samples_per_run": NAVIGATION_SAMPLES,
+                "median_run_p95_load_event_end_ms": round(statistics.median(
+                    item["p95_load_event_end_ms"] for item in summaries
+                ), 3),
+                "range_run_p95_load_event_end_ms": [
+                    min(item["p95_load_event_end_ms"] for item in summaries),
+                    max(item["p95_load_event_end_ms"] for item in summaries),
+                ],
+            }
+            for label, summaries in navigation_summaries.items()
+        }
+        fixture_navigation["scope"] = (
+            "synthetic loopback page navigation, includes browser and extension; "
+            "not production website or request-level p95"
+        )
+    else:
+        fixture_navigation = None
     left_buffers = summarize_engine_buffers(a)
     right_buffers = summarize_engine_buffers(b)
     if (left_buffers is None) != (right_buffers is None):
@@ -559,6 +661,7 @@ def compare(data, dataset, identical_build=False):
         "correctness": behavior,
         "builds_identical": identical_build,
         "paired_performance": paired,
+        "fixture_navigation": fixture_navigation,
         "engine_buffer_footprint": engine_buffers,
         "upstream": left,
         "meblock": right,
@@ -572,6 +675,7 @@ def compare(data, dataset, identical_build=False):
             "CPU and RSS process samples are browser-wide diagnostic figures.",
             "Engine buffer footprint counts only selected typed/WASM buffers, not JS objects or total retained add-on RAM.",
             "The buffer probe modifies only disposable instrumented test builds.",
+            "Fixture navigation p95 uses 20 synthetic local page loads per session and includes browser overhead; it is not request-level or real-world p95.",
             "Synthetic datasets are not evidence of real-user speedups.",
         ],
     }

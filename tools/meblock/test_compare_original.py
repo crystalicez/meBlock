@@ -89,6 +89,72 @@ def buffer_sample(size=1024):
 
 
 class CompareTests(unittest.TestCase):
+    def test_navigation_p95_samples_firefox_timing_and_checks_each_page(self):
+        class FixtureBrowser:
+            def __init__(self):
+                self.visited = []
+
+            def get(self, url):
+                self.visited.append(url)
+
+            def execute_script(self, script):
+                if script == runner.NAVIGATION_SCRIPT:
+                    index = len(self.visited) - 1
+                    return {
+                        "load_event_end_ms": 12.0 + index,
+                        "dom_content_loaded_end_ms": 10.0 + index,
+                        "navigation_type": "navigate",
+                    }
+                if script == runner.OBSERVATION_SCRIPT:
+                    return dict(WITH_ADDON)
+                raise AssertionError("Unexpected browser script")
+
+        browser = FixtureBrowser()
+        samples = runner.measure_fixture_navigation(
+            browser, "http://127.0.0.1:8000", WITH_ADDON
+        )
+        self.assertEqual(len(browser.visited), 22)
+        self.assertEqual(len(samples), 20)
+        summary = runner.summarize_fixture_navigation(samples)
+        self.assertEqual(summary["sample_count"], 20)
+        self.assertEqual(summary["p50_load_event_end_ms"], 23.5)
+        self.assertEqual(summary["p95_load_event_end_ms"], 32.0)
+        self.assertEqual(summary["p95_dom_content_loaded_end_ms"], 30.0)
+        self.assertEqual(summary["range_load_event_end_ms"], [14.0, 33.0])
+        self.assertNotIn("127.0.0.1", str(samples))
+
+    def test_navigation_errors_reject_bad_samples(self):
+        good = [
+            {"load_event_end_ms": 40.0, "dom_content_loaded_end_ms": 20.0}
+            for _ in range(20)
+        ]
+        for corrupted in (
+            good[:-1],
+            [*good[:-1], {"load_event_end_ms": 0, "dom_content_loaded_end_ms": 0}],
+            [*good[:-1], {"load_event_end_ms": 10, "dom_content_loaded_end_ms": 20}],
+            [*good[:-1], {"load_event_end_ms": float("nan"), "dom_content_loaded_end_ms": 10}],
+            [*good[:-1], {"load_event_end_ms": 50, "dom_content_loaded_end_ms": 20, "url": "private"}],
+        ):
+            with self.subTest(corrupted=corrupted[-1:]):
+                with self.assertRaises(ValueError):
+                    runner.summarize_fixture_navigation(corrupted)
+
+    def test_comparison_reports_page_p95_and_rejects_missing_side(self):
+        source, target = make_run(), make_run()
+        timings = [
+            {"load_event_end_ms": float(x), "dom_content_loaded_end_ms": float(x - 2)}
+            for x in range(5, 25)
+        ]
+        source["fixture_navigation"] = timings
+        target["fixture_navigation"] = [dict(v) for v in timings]
+        report = runner.compare({"upstream": [source], "meblock": [target]}, DATASET)
+        self.assertEqual(report["fixture_navigation"]["upstream"]["samples_per_run"], 20)
+        self.assertEqual(report["fixture_navigation"]["upstream"]["median_run_p95_load_event_end_ms"], 23.0)
+        self.assertIn("not production website", report["fixture_navigation"]["scope"])
+        target.pop("fixture_navigation")
+        with self.assertRaisesRegex(ValueError, "20 measured loads"):
+            runner.compare({"upstream": [source], "meblock": [target]}, DATASET)
+
     def test_engine_buffers_report_exact_known_byte_difference(self):
         upstream, meblock = make_run(), make_run()
         upstream["engine_buffer_footprint"] = buffer_sample(1024)
