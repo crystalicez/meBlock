@@ -8,8 +8,27 @@ import math
 from pathlib import Path
 import random
 import statistics
+from zipfile import BadZipFile, ZipFile
 
 from capture_memory import PRIVATE_DIR, ROOT, RULE_MIXES, SAFE_PROCESS_CATEGORIES, capture
+
+
+def assert_uninstrumented_xpi(path):
+    """Reject disposable benchmark builds as default-only RAM baselines."""
+    if not path.is_file():
+        raise ValueError("Baseline XPI does not exist")
+    try:
+        with ZipFile(path) as archive:
+            names = set(archive.namelist())
+            if "manifest.json" not in names:
+                raise ValueError("Baseline XPI lacks an extension manifest")
+            if names & {
+                "js/meblock-probe.js", "js/meblock-state-probe.js",
+                "assets/meblock-requests.json",
+            }:
+                raise ValueError("Instrumented performance XPI is not a RAM baseline")
+    except BadZipFile as exc:
+        raise ValueError("Invalid baseline XPI archive") from exc
 
 
 def schedule(pairs):
@@ -61,8 +80,12 @@ def summarize_pairs(rows, mode="rule-count"):
         slot = paired.setdefault(pair, {})
         if condition in slot:
             raise ValueError("Condition repeated within a pair")
-        if data.get("filter_engine", {}).get("auto_update") is not False:
+        engine_state = data.get("filter_engine", {})
+        if engine_state.get("auto_update") is not False:
             raise ValueError("Paired memory baseline requires disabled automatic filter updates")
+        if (type(engine_state.get("selected_lists")) is not int or
+            engine_state["selected_lists"] < 1):
+            raise ValueError("Paired memory baseline requires a valid enabled-list count")
         snapshots = data.get("captures")
         if not isinstance(snapshots, list) or len(snapshots) != 1:
             raise ValueError("A paired run requires exactly one memory report")
@@ -133,6 +156,7 @@ def summarize_pairs(rows, mode="rule-count"):
             data["firefox_version"],
             data["source_filter_assets_sha256"],
             data["filter_engine"]["selected_lists_sha256"],
+            data["filter_engine"].get("selected_lists"),
             data["filter_engine"]["cosmetic_filters"],
             data["filter_engine"]["network_filters"] if mode == "build" else None,
         )
@@ -151,6 +175,27 @@ def summarize_pairs(rows, mode="rule-count"):
         mode == "build" and source_inputs["stock"] == source_inputs["synthetic"]
     )
     uncertainty = paired_delta_statistics(deltas)
+    null_noise = None
+    if identical_xpi_control:
+        magnitudes = [abs(row["delta_mib"]) for row in deltas]
+        percent_magnitudes = [abs(row["delta_percent"]) for row in deltas]
+        null_noise = {
+            "median_absolute_process_delta_mib": round(
+                statistics.median(magnitudes), 3
+            ),
+            "max_absolute_process_delta_mib": round(max(magnitudes), 3),
+            "median_absolute_process_delta_percent": round(
+                statistics.median(percent_magnitudes), 3
+            ),
+            "max_absolute_process_delta_percent": round(
+                max(percent_magnitudes), 3
+            ),
+            "scope": (
+                "Observed same-XPI paired deviations in whole Firefox Extensions "
+                "process; finite samples do not set an upper noise bound, "
+                "addon-private RAM attribution, or a speedup"
+            ),
+        }
     if len(deltas) < 3:
         verdict = "EXPLORATORY: fewer than three independent pairs"
     elif min(settling) < 300:
@@ -170,6 +215,7 @@ def summarize_pairs(rows, mode="rule-count"):
         "comparison_mode": mode,
         "identical_xpi_negative_control": identical_xpi_control,
         "paired_uncertainty": uncertainty,
+        "same_xpi_process_noise_floor": null_noise,
         "condition_labels": {
             "stock": "control-A" if identical_xpi_control else "baseline",
             "synthetic": ("control-B" if identical_xpi_control else
@@ -221,6 +267,12 @@ def main(argv=None):
     elif (args.base_network_filters is None or
           args.candidate_addon is None and args.extra_synthetic_hostnames == 0):
         parser.error("Specify --base-network-filters and a comparison mode")
+    if args.default_lists:
+        try:
+            assert_uninstrumented_xpi(args.addon)
+            assert_uninstrumented_xpi(args.candidate_addon)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
     mode = "build" if args.candidate_addon is not None else "rule-count"
     pinned_network_count = args.base_network_filters
     rows = []
@@ -254,6 +306,15 @@ def main(argv=None):
             rows.append((pair, condition, data))
         summary = summarize_pairs(rows, mode=mode)
         summary["base_network_filters"] = pinned_network_count
+        first = rows[0][2]
+        summary["pinned_profile_identity"] = {
+            "firefox_version": first["firefox_version"],
+            "network_filters": first["filter_engine"]["network_filters"],
+            "cosmetic_filters": first["filter_engine"]["cosmetic_filters"],
+            "selected_list_count": first["filter_engine"].get("selected_lists"),
+            "selected_list_keys_sha256": first["filter_engine"]["selected_lists_sha256"],
+            "bundled_filter_assets_sha256": first["source_filter_assets_sha256"],
+        }
         summary["workload"] = (
             "default-enabled-filter-lists" if args.default_lists
             else "same-pinned-lists-plus-synthetic-rules"

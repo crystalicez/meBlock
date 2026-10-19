@@ -265,6 +265,32 @@ class CompareTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "20 measured loads"):
             runner.compare({"upstream": [source], "meblock": [target]}, DATASET)
 
+    def test_default_rule_candidate_effects_detect_real_outcome_and_modifier_differences(self):
+        observation = {
+            "outcomes": [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            "modifier_masks": [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+        }
+        result = runner.summarize_candidate_effects(observation, 3)
+        self.assertEqual(result["candidate_rules"], 3)
+        self.assertEqual(result["same_host_frame_distinguishable_candidates"], 1)
+        self.assertEqual(result["external_reader_frame_distinguishable_candidates"], 2)
+        self.assertEqual(result["both_contexts_distinguishable_candidates"], 1)
+        self.assertEqual(result["at_least_one_context_distinguishable_candidates"], 2)
+        self.assertEqual(result["no_distinguishable_result_in_tested_contexts"], 1)
+        self.assertEqual(result["positive_requests_blocked"], 2)
+        self.assertEqual(result["near_miss_requests_blocked"], 0)
+        self.assertNotIn("https://", json.dumps(result))
+        with self.assertRaisesRegex(ValueError, "Malformed per-rule"):
+            runner.summarize_candidate_effects({
+                **observation, "modifier_masks": [0] * 11
+            }, 3)
+        with self.assertRaisesRegex(ValueError, "Malformed per-rule"):
+            runner.summarize_candidate_effects({
+                **observation, "outcomes": [True] + observation["outcomes"][1:]
+            }, 3)
+        with self.assertRaisesRegex(ValueError, "Invalid count"):
+            runner.summarize_candidate_effects(observation, 0)
+
     def test_request_latency_nearest_rank_validator_rejects_bad_samples(self):
         baseline = {
             "schema": "meblock-request-latency-v2", "clock_step_us": 0.5,

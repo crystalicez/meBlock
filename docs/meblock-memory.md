@@ -29,12 +29,36 @@ requires exactly that count in every later profile. It also validates
 matching cosmetic count, selected-list fingerprint and bundled filter
 asset fingerprint. Do not supply `--base-network-filters`,
 `--extra-synthetic-rules` or other synthetic additions in this mode.
+The CLI also **rejects benchmark-instrumented XPIs** containing
+`js/meblock-probe.js`, `js/meblock-state-probe.js` or
+`assets/meblock-requests.json` before launching Firefox, so a disposable
+speed-test package cannot silently contaminate the RAM baseline.
 With the **same XPI** in both positions, it serves as a noise-only
 negative control.
 
 A three-pair, five-minute experiment produces paired whole-Extensions-process
 readings but is not automatically proof of extension-private RAM savings.
-A directional process-wide claim needs more runs and uncertainty checks.
+The paired report includes the actual Firefox version, compiled filter counts,
+selected default list count and SHA-256 of its selected-list names and bundled
+filter assets, without reporting any user-specific URLs or filter content.
+When the same byte-identical XPI appears in both positions, it separately
+reports the **median and maximum absolute whole-process A/B noise**.
+Even if six same-XPI samples accidentally show a directional statistical
+signal, the verdict must remain **CONTROL: process noise, not optimization**.
+A directional process-wide claim needs independent candidate-build runs,
+more repetitions, and attribution checks. A single Extensions-process
+`explicit` figure is never the private retained RAM of uBlock/meBlock.
+A completed **three-pair real Firefox 157 same-XPI control** with default
+enabled lists, 300 seconds post-readiness per isolated profile and no extra
+rules gave Extensions-process explicit paired differences of **+0.074,
+−0.036 and +0.031 MiB** (median absolute pair difference **0.036 MiB**,
+maximum observed **0.074 MiB / 0.135%**). The paired bootstrap 95%
+interval was **[−0.036, +0.074] MiB** and the exact sign-test p-value
+was **1.0**. These are observed same-build process deviations, not
+an upper bound on environmental noise, per-addon retained RAM, or a
+measured gain. Actual different-build optimization comparisons still
+require their own long AB/BA validation.
+
 The fixed cosmetic/scriptlet browser fixture and synthetic request corpus
 remain separate **correctness tests**, not part of this default RAM baseline.
 They do not verify the behavior of every rule in the installed default lists.

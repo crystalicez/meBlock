@@ -87,7 +87,21 @@ from the chosen bundled files are assigned exactly once across the chosen shard
 count; each run checks every generated request decision and modifier mask
 against the pinned upstream engine. The generator fails when a selected
 shard would exceed its safe request cap. Run other `--shard-index`
-values separately to cover more candidates. The resulting dataset and
+values separately to cover more candidates. The comparator also reports
+**per-candidate matched-versus-near-miss observed effects** (including
+modifier decisions) separately for external-reader and same-host document
+origins. A near-miss URL is not necessarily first-party even when its
+matching-host counterpart is, so these are origin-context comparisons,
+not isolated third-party modifier tests. This counts
+how many candidates actually produced a distinguishable outcome in the
+tested context; it **does not prove which rule caused the difference**
+or that a non-distinguishable rule is inactive. In a prior
+one-shard live Firefox control, all **365/365** candidate rules had a
+distinguishable decision/modifier outcome in at least one of two contexts.
+Of 730 matching-host requests, 728 were blocked; of 730 near-miss
+requests, three were also blocked by the complete default-list engine.
+These results are **not** a per-rule independent correctness oracle or
+representative browsing traffic. The resulting dataset and
 numeric-only coverage manifest remain in **Git-ignored `dist/build/`**,
 and the comparison validates that manifest's request count and SHA-256.
 

@@ -7,8 +7,9 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from zipfile import ZipFile
 
-from memory_experiment import main, schedule, summarize_pairs
+from memory_experiment import assert_uninstrumented_xpi, main, schedule, summarize_pairs
 
 
 def sample(condition, mib, *, selection="stable", source="sha-stock", version="157.0"):
@@ -16,6 +17,7 @@ def sample(condition, mib, *, selection="stable", source="sha-stock", version="1
         "captures": [{"extension_process_explicit_mib": mib}],
         "filter_engine": {
             "selected_lists_sha256": selection,
+            "selected_lists": 10,
             "cosmetic_filters": 44192,
             "network_filters": 600000,
             "auto_update": False,
@@ -96,8 +98,37 @@ class PairedMemoryTests(unittest.TestCase):
         result = summarize_pairs(rows, mode="build")
         self.assertTrue(result["identical_xpi_negative_control"])
         self.assertTrue(result["paired_uncertainty"]["directional_process_signal"])
+        self.assertEqual(result["same_xpi_process_noise_floor"][
+            "median_absolute_process_delta_mib"], 15.0)
+        self.assertEqual(result["same_xpi_process_noise_floor"][
+            "max_absolute_process_delta_mib"], 15.0)
+        self.assertEqual(result["same_xpi_process_noise_floor"][
+            "median_absolute_process_delta_percent"], 25.0)
+        self.assertEqual(result["same_xpi_process_noise_floor"][
+            "max_absolute_process_delta_percent"], 25.0)
         self.assertIn("CONTROL: identical XPI", result["verdict"])
         self.assertIn("not an optimization", result["verdict"])
+
+    def test_enabled_list_count_drift_rejected_even_if_hash_is_unchanged(self):
+        stable = sample("stock", 54)
+        changed = sample("synthetic", 55)
+        changed["filter_engine"]["selected_lists"] = 9
+        with self.assertRaisesRegex(ValueError, "across pairs"):
+            summarize_pairs([
+                (0, "stock", stable),
+                (0, "synthetic", sample("synthetic", 55)),
+                (1, "stock", sample("stock", 54)),
+                (1, "synthetic", changed),
+            ], mode="build")
+
+    def test_unreported_enabled_list_count_rejected(self):
+        missing = sample("stock", 54)
+        missing["filter_engine"].pop("selected_lists")
+        with self.assertRaisesRegex(ValueError, "enabled-list count"):
+            summarize_pairs([
+                (0, "stock", missing),
+                (0, "synthetic", sample("synthetic", 55)),
+            ], mode="build")
 
     def test_short_identical_xpi_control_is_flagged_in_verdict_and_cli(self):
         rows = []
@@ -127,6 +158,29 @@ class PairedMemoryTests(unittest.TestCase):
             self.assertEqual(saved["conditions"],
                              "identical XPI in both positions; same-build negative control")
 
+    def test_default_ram_rejects_instrumented_comparison_xpi_before_firefox(self):
+        with tempfile.TemporaryDirectory() as directory:
+            good = Path(directory) / "stock.xpi"
+            bad = Path(directory) / "instrumented.xpi"
+            with ZipFile(good, "w") as source:
+                source.writestr("manifest.json", '{"manifest_version":2}')
+            with ZipFile(bad, "w") as source:
+                source.writestr("manifest.json", '{"manifest_version":2}')
+                source.writestr("js/meblock-probe.js", "/* test-only */")
+            assert_uninstrumented_xpi(good)
+            with self.assertRaisesRegex(ValueError, "Instrumented performance XPI"):
+                assert_uninstrumented_xpi(bad)
+            with redirect_stderr(StringIO()) as text:
+                with self.assertRaises(SystemExit) as error:
+                    main([
+                        "--addon", str(bad), "--candidate-addon", str(good),
+                        "--default-lists", "--pairs", "1",
+                    ])
+            self.assertEqual(error.exception.code, 2)
+            self.assertIn("Instrumented performance XPI", text.getvalue())
+            with self.assertRaisesRegex(ValueError, "does not exist"):
+                assert_uninstrumented_xpi(Path(directory) / "missing.xpi")
+
     def test_default_lists_auto_pin_first_real_network_count_and_never_inject(self):
         calls = []
         def fake_capture(*_args, **kwargs):
@@ -140,6 +194,7 @@ class PairedMemoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with (patch("memory_experiment.PRIVATE_DIR", Path(directory)),
                   patch("memory_experiment.capture", side_effect=fake_capture),
+                  patch("memory_experiment.assert_uninstrumented_xpi"),
                   redirect_stdout(StringIO())):
                 outcome = main([
                     "--addon", "stock.xpi", "--candidate-addon", "fork.xpi",
@@ -157,6 +212,15 @@ class PairedMemoryTests(unittest.TestCase):
         self.assertEqual(report["base_network_filters"], 252243)
         self.assertEqual(report["extra_synthetic_rules"], 0)
         self.assertEqual(report["synthetic_rule_mix"], "none")
+        self.assertEqual(report["pinned_profile_identity"], {
+            "firefox_version": "157.0",
+            "network_filters": 252243,
+            "cosmetic_filters": 44192,
+            "selected_list_count": 10,
+            "selected_list_keys_sha256": "stable",
+            "bundled_filter_assets_sha256": "same-pinned-public-filter-asset-hash",
+        })
+        self.assertIsNone(report["same_xpi_process_noise_floor"])
         self.assertEqual(
             report["conditions"],
             "original XPI vs candidate XPI using default enabled filter lists",
@@ -183,6 +247,7 @@ class PairedMemoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with (patch("memory_experiment.PRIVATE_DIR", Path(directory)),
                   patch("memory_experiment.capture", side_effect=fake_capture),
+                  patch("memory_experiment.assert_uninstrumented_xpi"),
                   redirect_stdout(StringIO()) as output):
                 outcome = main([
                     "--default-lists", "--candidate-addon", "fork.xpi",

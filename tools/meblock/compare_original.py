@@ -887,6 +887,59 @@ def read_rule_derived_manifest(dataset, payload, rows, default_lists):
     return {key: manifest[key] for key in allowed}
 
 
+def summarize_candidate_effects(reference, candidates):
+    """Count distinguishable default-rule probes, not proof of rule ownership."""
+    if type(candidates) is not int or candidates < 1:
+        raise ValueError("Invalid count of rule-derived candidates")
+    values = reference.get("outcomes")
+    modifiers = reference.get("modifier_masks")
+    if (
+        not isinstance(values, list) or not isinstance(modifiers, list)
+        or len(values) != 4 * candidates or len(modifiers) != len(values)
+        or any(type(value) is not int or value not in (0, 1, 2) for value in values)
+        or any(type(value) is not int or value < 0 or value > 63
+               for value in modifiers)
+    ):
+        raise ValueError("Malformed per-rule result vectors")
+    same_host_frame = external_reader_frame = both = 0
+    positive_blocked = near_miss_blocked = 0
+    for offset in range(0, len(values), 4):
+        first_diff = (
+            (values[offset], modifiers[offset]) !=
+            (values[offset + 1], modifiers[offset + 1])
+        )
+        third_diff = (
+            (values[offset + 2], modifiers[offset + 2]) !=
+            (values[offset + 3], modifiers[offset + 3])
+        )
+        # Generator emits the external reader (third-party) before
+        # the same-host document (first-party).
+        external_reader_frame += int(first_diff)
+        same_host_frame += int(third_diff)
+        both += int(first_diff and third_diff)
+        positive_blocked += int(values[offset] == 1) + int(values[offset + 2] == 1)
+        near_miss_blocked += int(values[offset + 1] == 1) + int(values[offset + 3] == 1)
+    return {
+        "candidate_rules": candidates,
+        "same_host_frame_distinguishable_candidates": same_host_frame,
+        "external_reader_frame_distinguishable_candidates": external_reader_frame,
+        "both_contexts_distinguishable_candidates": both,
+        "at_least_one_context_distinguishable_candidates": (
+            same_host_frame + external_reader_frame - both
+        ),
+        "no_distinguishable_result_in_tested_contexts": (
+            candidates - same_host_frame - external_reader_frame + both
+        ),
+        "positive_requests_blocked": positive_blocked,
+        "near_miss_requests_blocked": near_miss_blocked,
+        "scope": (
+            "Decision+modifier outcome of matched and near-miss URLs. "
+            "A distinguishable outcome does not isolate which filter caused it; "
+            "non-distinguishable does not prove the rule is inactive."
+        ),
+    }
+
+
 def verify_pinned_selection(data, derived_coverage):
     if derived_coverage is None or "selected_list_keys_sha256" not in derived_coverage:
         return
@@ -1022,6 +1075,13 @@ def main():
             data, dataset, identical_build=metadata["build_delta"]["files_different"] == 0,
             default_lists=args.default_lists,
         )
+        if derived_coverage is not None:
+            metadata["comparison"]["rule_derived_observed_effects"] = (
+                summarize_candidate_effects(
+                    data["upstream"][0],
+                    derived_coverage["simple_host_rules_in_shard"],
+                )
+            )
         metadata["status"] = ("failed" if metadata["comparison"]["verdict"].startswith("FAIL")
                               else "complete")
         return 1 if metadata["status"] == "failed" else 0
