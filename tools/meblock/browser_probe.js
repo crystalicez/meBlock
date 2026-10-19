@@ -2,7 +2,7 @@
 import µb from './background.js';
 import { checkDynamicFirewall, checkPersistedSettings } from './meblock-state-probe.js';
 import { FilteringContext } from './filtering-context.js';
-import sfne from './static-net-filtering.js';
+import sfne, { meblockEngineBufferFootprint } from './static-net-filtering.js';
 import { redirectEngine } from './redirect-engine.js';
 import {
     benchmarkStaticNetFiltering,
@@ -44,6 +44,9 @@ function prepareContext(fctxt, request) {
 
 async function main() {
     await ready();
+    if (µb.userSettings.autoUpdate !== false) {
+        throw new Error('Test-only Firefox build did not freeze filter updates');
+    }
     const persistence = await checkPersistedSettings(µb);
     if (persistence.continued === false) { return; }
     const dynamicFirewall = checkDynamicFirewall();
@@ -55,6 +58,7 @@ async function main() {
         throw new Error('Dataset missing or empty');
     }
 
+    const engineBuffers = meblockEngineBufferFootprint();
     const official = await benchmarkStaticNetFiltering({ redirectEngine });
     if (!official.includes('Benchmarked static network filtering engine:')) {
         throw new Error('Upstream benchmark did not execute: ' + String(official));
@@ -123,6 +127,7 @@ async function main() {
         individual_pass_ms: elapsedPerPass,
         engine_match_ms: elapsed,
         us_per_request: elapsed * 1000 / (data.length * timedPasses),
+        engine_buffer_footprint: engineBuffers,
         outcomes,
         modifier_masks: modifierMasks,
         decisions: { blocked, allowed, passed: data.length - blocked - allowed },

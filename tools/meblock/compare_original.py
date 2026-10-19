@@ -41,6 +41,7 @@ from selenium.webdriver.firefox.service import Service
 ROOT = Path(__file__).resolve().parents[2]
 BUILD_ROOT = ROOT / "dist" / "build"
 PROBE_PATH = Path(__file__).with_name("browser_probe.js")
+BUFFER_PROBE_PATH = Path(__file__).with_name("engine_buffer_probe.js")
 ROLES = ("upstream", "meblock")
 
 
@@ -109,8 +110,21 @@ def run_build(source, assets):
 
 
 def probe_package(build, destination, role, endpoint, token, dataset_bytes):
+    network_engine = build / "js" / "static-net-filtering.js"
+    original_engine = network_engine.read_text(encoding="utf-8")
+    if "meblockEngineBufferFootprint" in original_engine:
+        raise RuntimeError("Test-only engine buffer probe already injected")
     config = {"role": role, "endpoint": endpoint, "token": token}
     (build / "assets" / "meblock-requests.json").write_bytes(dataset_bytes)
+    background = build / "js" / "background.js"
+    settings_source = background.read_text(encoding="utf-8")
+    update_default = "    autoUpdate: true,"
+    if settings_source.count(update_default) != 1:
+        raise RuntimeError("Cannot freeze automatic updates in temporary test build")
+    background.write_text(
+        settings_source.replace(update_default, "    autoUpdate: false,", 1),
+        encoding="utf-8",
+    )
     core_filters = build / "assets" / "ublock" / "filters.min.txt"
     if not core_filters.is_file():
         raise RuntimeError("Built-in filter list missing for browser behavior fixture")
@@ -124,6 +138,10 @@ def probe_package(build, destination, role, endpoint, token, dataset_bytes):
     )
     state_probe = Path(__file__).with_name("state_probe.js")
     (build / "js" / "meblock-state-probe.js").write_bytes(state_probe.read_bytes())
+    network_engine.write_text(
+        original_engine + "\n" + BUFFER_PROBE_PATH.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     bg = build / "background.html"
     html = bg.read_text(encoding="utf-8")
     anchor = "</body>"
@@ -382,6 +400,42 @@ def summarize_role(series):
     return summary
 
 
+ENGINE_BUFFER_KEYS = ("filter_data", "origin_trie", "destination_trie", "pattern_trie")
+WASM_BUFFER_KEYS = ENGINE_BUFFER_KEYS[1:]
+
+
+def summarize_engine_buffers(series):
+    readings = [row.get("engine_buffer_footprint") for row in series]
+    if all(reading is None for reading in readings):
+        return None
+    for reading in readings:
+        if not isinstance(reading, dict) or set(reading) != {
+            "schema", "allocated_bytes", "total_known_allocated_bytes",
+            "filter_data_used_bytes", "filter_references_count",
+            "compiled_network_filters", "wasm_enabled",
+        } or reading["schema"] != "meblock-engine-buffers-v1":
+            raise ValueError("Missing or invalid test-only engine buffer measurement")
+        buffers = reading["allocated_bytes"]
+        wasm = reading["wasm_enabled"]
+        if (not isinstance(buffers, dict) or set(buffers) != set(ENGINE_BUFFER_KEYS)
+            or not isinstance(wasm, dict) or set(wasm) != set(WASM_BUFFER_KEYS)
+            or any(type(v) is not bool for v in wasm.values())
+            or any(type(v) is not int or v < 0 for v in buffers.values())
+            or type(reading["filter_data_used_bytes"]) is not int
+            or reading["filter_data_used_bytes"] < 0
+            or reading["filter_data_used_bytes"] > buffers["filter_data"]
+            or type(reading["filter_references_count"]) is not int
+            or reading["filter_references_count"] < 1
+            or type(reading["compiled_network_filters"]) is not int
+            or reading["compiled_network_filters"] < 1
+            or type(reading["total_known_allocated_bytes"]) is not int
+            or reading["total_known_allocated_bytes"] != sum(buffers.values())):
+            raise ValueError("Invalid or inconsistent engine buffer counters")
+    if any(reading != readings[0] for reading in readings[1:]):
+        raise ValueError("Engine buffer footprint drifted between matching test runs")
+    return readings[0]
+
+
 def compare(data, dataset, identical_build=False):
     a, b = data["upstream"], data["meblock"]
     behavior = check_behavior(a, b, dataset)
@@ -462,6 +516,24 @@ def compare(data, dataset, identical_build=False):
         else all(isinstance(value, list) and value == filters[0] for value in filters)
     )
     left, right = summarize_role(a), summarize_role(b)
+    left_buffers = summarize_engine_buffers(a)
+    right_buffers = summarize_engine_buffers(b)
+    if (left_buffers is None) != (right_buffers is None):
+        raise ValueError("Engine buffer measurements missing for one build")
+    engine_buffers = None
+    if left_buffers is not None:
+        if (left_buffers["compiled_network_filters"] !=
+            right_buffers["compiled_network_filters"]):
+            raise ValueError("Different compiled network filter counts between builds")
+        engine_buffers = {
+            "upstream": left_buffers,
+            "meblock": right_buffers,
+            "known_allocated_delta_bytes": (
+                right_buffers["total_known_allocated_bytes"] -
+                left_buffers["total_known_allocated_bytes"]
+            ),
+            "scope": "selected engine-owned typed/WASM buffers only; not total add-on RAM",
+        }
     matching = (behavior["per_request_match"] and behavior["modifier_per_request_match"]
                 and behavior["aggregate_modifier_counts_match"]
                 and behavior["auxiliary_benchmarks_match"] and behavior["browser_page_match"]
@@ -487,6 +559,7 @@ def compare(data, dataset, identical_build=False):
         "correctness": behavior,
         "builds_identical": identical_build,
         "paired_performance": paired,
+        "engine_buffer_footprint": engine_buffers,
         "upstream": left,
         "meblock": right,
         "delta_median_us_per_request": round(delta, 5),
@@ -497,6 +570,8 @@ def compare(data, dataset, identical_build=False):
             "Direct-match behavior is compared per request, not the complete network pipeline.",
             "Cosmetic/scriptlet tests use upstream's existing aggregate benchmarks.",
             "CPU and RSS process samples are browser-wide diagnostic figures.",
+            "Engine buffer footprint counts only selected typed/WASM buffers, not JS objects or total retained add-on RAM.",
+            "The buffer probe modifies only disposable instrumented test builds.",
             "Synthetic datasets are not evidence of real-user speedups.",
         ],
     }
@@ -545,8 +620,8 @@ def main():
         "harness_files_sha256": {
             name: hash_file(Path(__file__).with_name(name))
             for name in (
-                "compare_original.py", "browser_probe.js", "state_probe.js",
-                "browser_fixtures.py", "comparison_stats.py",
+                "compare_original.py", "browser_probe.js", "engine_buffer_probe.js",
+                "state_probe.js", "browser_fixtures.py", "comparison_stats.py",
                 "benchmark_firefox.py", "filtering_benchmark.py",
             )
         },

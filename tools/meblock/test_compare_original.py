@@ -69,7 +69,63 @@ DATASET = [
 ]
 
 
+def buffer_sample(size=1024):
+    sizes = {
+        "filter_data": size, "origin_trie": 256,
+        "destination_trie": 384, "pattern_trie": 512,
+    }
+    return {
+        "schema": "meblock-engine-buffers-v1",
+        "allocated_bytes": sizes,
+        "total_known_allocated_bytes": sum(sizes.values()),
+        "filter_data_used_bytes": 256,
+        "filter_references_count": 7,
+        "compiled_network_filters": 252243,
+        "wasm_enabled": {
+            "origin_trie": False, "destination_trie": False,
+            "pattern_trie": False,
+        },
+    }
+
+
 class CompareTests(unittest.TestCase):
+    def test_engine_buffers_report_exact_known_byte_difference(self):
+        upstream, meblock = make_run(), make_run()
+        upstream["engine_buffer_footprint"] = buffer_sample(1024)
+        meblock["engine_buffer_footprint"] = buffer_sample(2048)
+        result = runner.compare({"upstream": [upstream], "meblock": [meblock]}, DATASET)
+        self.assertEqual(result["engine_buffer_footprint"]["known_allocated_delta_bytes"], 1024)
+        self.assertIn("not total add-on RAM", result["engine_buffer_footprint"]["scope"])
+
+    def test_mismatched_compiled_network_filter_count_rejected(self):
+        upstream, meblock = make_run(), make_run()
+        upstream["engine_buffer_footprint"] = buffer_sample()
+        meblock["engine_buffer_footprint"] = buffer_sample()
+        meblock["engine_buffer_footprint"]["compiled_network_filters"] -= 1
+        with self.assertRaisesRegex(ValueError, "compiled network filter counts"):
+            runner.compare({"upstream": [upstream], "meblock": [meblock]}, DATASET)
+
+    def test_buffer_counter_drift_and_untrusted_fields_rejected(self):
+        one, two = make_run(), make_run()
+        one["engine_buffer_footprint"] = buffer_sample()
+        two["engine_buffer_footprint"] = buffer_sample(2048)
+        with self.assertRaisesRegex(ValueError, "drifted"):
+            runner.compare({
+                "upstream": [one, two],
+                "meblock": [one, two],
+            }, DATASET)
+        malicious = buffer_sample()
+        malicious["user_profile_path"] = "private-diagnostic-string"
+        with self.assertRaisesRegex(ValueError, "invalid test-only"):
+            runner.summarize_engine_buffers([
+                {"engine_buffer_footprint": malicious}
+            ])
+        invalid = buffer_sample()
+        invalid["total_known_allocated_bytes"] += 1
+        with self.assertRaisesRegex(ValueError, "inconsistent"):
+            runner.summarize_engine_buffers([{"engine_buffer_footprint": invalid}])
+
+
     def test_equal_behavior_with_identical_runs_is_inconclusive(self):
         data = {"upstream": [make_run() for _ in range(5)],
                 "meblock": [make_run() for _ in range(5)]}
@@ -271,6 +327,12 @@ class PackageTests(unittest.TestCase):
             (root / "background.html").write_text(
                 "<html><body></body></html>", encoding="utf-8"
             )
+            (root / "js" / "static-net-filtering.js").write_text(
+                "export default {};", encoding="utf-8"
+            )
+            (root / "js" / "background.js").write_text(
+                "const defaults = {\n    autoUpdate: true,\n};", encoding="utf-8"
+            )
             (root / "assets" / "ublock" / "filters.min.txt").write_text(
                 "! test baseline\n", encoding="utf-8"
             )
@@ -288,6 +350,15 @@ class PackageTests(unittest.TestCase):
                 )
                 self.assertIn(
                     b"test-blocked.js", archive.read("assets/ublock/filters.min.txt")
+                )
+                engine = archive.read("js/static-net-filtering.js")
+                self.assertIn(b"export default {};", engine)
+                self.assertIn(b"export function meblockEngineBufferFootprint()", engine)
+                self.assertIn(b"engine_buffer_footprint", archive.read("js/meblock-probe.js"))
+                self.assertIn(b"autoUpdate: false", archive.read("js/background.js"))
+            with self.assertRaisesRegex(RuntimeError, "already injected"):
+                runner.probe_package(
+                    root, xpi, "meblock", "http://127.0.0.1:8888", "test-token", b"[]"
                 )
 
 

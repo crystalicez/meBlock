@@ -6,6 +6,41 @@ of one extension. The reported **about 60 MB** for roughly **600,000 filters**
 is a user-observed starting point, **not yet a reproducible baseline** or a
 verified attribution to a filtering engine component.
 
+## Choose the least noisy measurement that answers the question
+
+For small changes to static network filtering structures, screen with the
+read-only **known-buffer byte counters** from
+`tools/meblock/compare_original.py`. The comparison tool adds a small
+export to the static network filtering module in **disposable test builds
+only** and reads actual loaded typed/WASM backing-buffer capacities.
+These counters are exact for the four selected allocations and can be
+checked in a single Firefox run. Repeat across fresh profiles to verify
+identical buffer counts. In a six-profile same-build control with the test
+fixture and automatic filter updates disabled, all three sessions per build
+reported 17.5 MiB of these four backing buffers and a zero byte delta.
+This is not an estimate of the complete extension heap or a 600k-rule
+memory baseline. The counters do **not** cover all JS objects,
+other engine caches, the cosmetic/scriptlet engines, or Firefox's native
+heap. See [fast buffer screening](meblock-comparison.md#fast-network-engine-buffer-screening).
+
+For an early whole-process RAM signal, run a short offline A/B screen
+with `memory_experiment.py --pairs 3 --settle-seconds 30` plus the required
+`--base-network-filters` and either `--candidate-addon` or
+`--extra-synthetic-rules` arguments. Its verdict
+must remain **EXPLORATORY**, regardless of the observed difference.
+Use a same-XPI-versus-itself negative control to estimate startup/process
+noise before treating differences of a few MiB as real. Do not interpret
+repeated snapshots from one profile as independent pairs.
+
+For a final RAM comparison, capture with **uninstrumented** XPIs, at
+least three alternating independent A/B pairs and at least 300 seconds
+after verified engine readiness for **each** condition. Keep the
+workload and filter state pinned. Do not replace this check with
+engine buffer counts or shorter Firefox sessions. Even long captures
+currently measure the whole Extensions process, not extension-exclusive
+retained RAM. Candidate confirmation must also check request latency
+and page behavior.
+
 ## Capture an actual Firefox memory report
 
 1. Install the **uninstrumented** upstream uBlock Origin or meBlock Firefox

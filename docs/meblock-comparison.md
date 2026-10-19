@@ -65,6 +65,45 @@ Those process-wide readings are secondary diagnostics, not reliable per-extensio
 
 **Coverage limits:** These fixtures exercise selected network and page-side effects and the internal session firewall state. Browser-wide dynamic-firewall blocking, CNAME uncloaking, HTML filtering, filter subscriptions, persistence across a full Firefox process restart, large-page behavior, all redirect resources, advanced scriptlets and private memory attribution require separate tests. The settings check exercises persistence across **extension reload**, not process restart. The upstream cosmetic/scriptlet microbenchmarks still expose only aggregate timings. Synthetic datasets do not establish real-user speedups.
 
+## Fast network-engine buffer screening
+
+For quick memory triage, the Firefox comparison runner appends
+`tools/meblock/engine_buffer_probe.js` **only to disposable instrumented
+test builds**. Production `src/js/static-net-filtering.js` and release XPIs
+are unchanged. Once Firefox reports engine readiness, it reads four
+engine-owned backing-buffer capacities directly:
+
+- `filter_data`, `origin_trie`, `destination_trie`, and `pattern_trie`.
+- The sum of these known allocated buffers, the used portion of filter data,
+  the count of JS filter references, and whether each trie uses WASM.
+
+The runner rejects invalid, non-numeric, or changing buffer readings across
+sessions of the same build. Its JSON `comparison.engine_buffer_footprint`
+contains only fixed numeric counters and WASM booleans, alongside the
+byte delta between original and fork. Use pinned public filter assets and
+matching compiled filter counts. A useful negative control compares
+byte-identical builds: its known-buffer delta should be **exactly zero**.
+
+```powershell
+python tools/meblock/compare_original.py --dataset dist/build/meblock-requests-coverage.json --runs 3
+```
+
+This is a **fast structural memory measurement**, not a measurement of the
+full extension heap. It counts known network-engine typed-array and WASM
+backing buffers, not JS object graphs, filter-reference storage, other
+extension components, Firefox allocators, or native allocations. Reading
+the counters is cheap, but packaging both builds and starting fresh Firefox
+sessions still takes time. Buffer equality does not prove that total
+retained RAM is equal. A changed buffer size identifies a candidate for
+profiling, not a proven memory optimization.
+
+For changes outside these buffers or final acceptance, use the uninstrumented
+`memory_experiment.py` and isolated `about:memory` captures. Start with a
+short, explicitly **EXPLORATORY** paired screen. Reserve the slower three or
+more independent 300-second A/B pairs, same-XPI noise control, and realistic
+page behavior/latency checks for promising candidates. A shorter settle time
+must not become a claimed steady-state memory result.
+
 Run regression checks locally by default. `.github/workflows/meblock-regression.yml` uses **manual `workflow_dispatch` only**, so pushes and pull requests do not start its GitHub Actions jobs. When a hosted Windows check is needed, open GitHub Actions, select **meBlock regression tooling**, then choose **Run workflow**. The default manual run covers Python unit tests, JavaScript syntax and deterministic corpus generation. Enable `firefox_integration` only for the optional real Firefox comparison. That job fetches official upstream source and public filter assets into a fresh test environment. No raw JSON evidence is uploaded to this public repository. Neither manual job replaces the full local multi-run performance gate, and the hosted Firefox job's results must be verified before being cited.
 
 ## Extension memory attribution
