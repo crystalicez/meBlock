@@ -160,6 +160,26 @@ memory savings or preserved lookup latency. A result remains
 each condition was held for at least 300 seconds after filter readiness.
 Short Firefox smoke runs cannot be labeled steady-state baseline measurements.
 
+The summary reports each paired RAM difference, the range, median absolute
+deviation, an independently resampled 95% interval for the paired median,
+and a two-sided exact sign-test result. Three pairs cannot establish a
+directional RAM difference from this test: even three perfectly consistent
+nonzero differences have a two-sided sign-test p-value of 0.25. A directional
+**process-wide** signal needs at least six independent pairs, p < 0.05,
+and a resampled interval entirely to one side of zero. None of these
+statistics provide addon-only attribution or remove Firefox runtime noise.
+
+For a zero-change negative control, use the **same uninstrumented XPI** as
+both `--addon` and `--candidate-addon`. The summary marks it as
+`identical_xpi_negative_control=true` and, after qualifying steady-state
+runs, labels it `CONTROL` regardless of how large or consistent the RAM
+difference appears. Short controls stay `EXPLORATORY` and explicitly display
+`IDENTICAL-XPI NEGATIVE CONTROL` in the verdict and `control-A`/`control-B`
+labels. The report includes the identification field regardless of duration.
+A real candidate must beat the control noise in comparable sessions and pass
+filtering correctness and latency checks
+before any optimization claim.
+
 Firefox system-level scripting is enabled **only** in this isolated test
 session via geckodriver's `--allow-system-access` flag so the tool can ask
 `nsIMemoryInfoDumper` to write a full anonymized JSON.gz report. The driver

@@ -59,6 +59,87 @@ class PairedMemoryTests(unittest.TestCase):
         self.assertEqual(result["median_paired_delta_mib"], 11)
         self.assertIn("process-wide", result["verdict"])
 
+    def test_three_matching_deltas_are_not_statistically_decisive(self):
+        rows = [
+            (i, name, sample(name, amount))
+            for i in range(3)
+            for name, amount in (("stock", 50.0), ("synthetic", 60.0))
+        ]
+        result = summarize_pairs(rows)
+        stats = result["paired_uncertainty"]
+        self.assertEqual(stats["paired_delta_range_mib"], [10.0, 10.0])
+        self.assertEqual(stats["paired_delta_bootstrap_95_interval_mib"], [10.0, 10.0])
+        self.assertEqual(stats["exact_two_sided_sign_test_p"], 0.25)
+        self.assertFalse(stats["directional_process_signal"])
+        self.assertIn("directional difference unproven", result["verdict"])
+
+    def test_six_consistent_independent_deltas_are_process_signal_only(self):
+        rows = [
+            (i, name, sample(name, 50.0 if name == "stock" else 62.0 + i))
+            for i in range(6)
+            for name in ("stock", "synthetic")
+        ]
+        result = summarize_pairs(rows)
+        stats = result["paired_uncertainty"]
+        self.assertEqual(stats["paired_delta_range_mib"], [12.0, 17.0])
+        self.assertEqual(stats["exact_two_sided_sign_test_p"], 0.03125)
+        self.assertTrue(stats["directional_process_signal"])
+        self.assertIn("process-wide signal only", result["verdict"])
+        self.assertIn("no per-extension optimization claim", result["verdict"])
+
+    def test_identical_xpi_cannot_be_called_optimization_even_with_six_large_deltas(self):
+        rows = [
+            (i, name, sample(name, 60.0 if name == "stock" else 45.0))
+            for i in range(6)
+            for name in ("stock", "synthetic")
+        ]
+        result = summarize_pairs(rows, mode="build")
+        self.assertTrue(result["identical_xpi_negative_control"])
+        self.assertTrue(result["paired_uncertainty"]["directional_process_signal"])
+        self.assertIn("CONTROL: identical XPI", result["verdict"])
+        self.assertIn("not an optimization", result["verdict"])
+
+    def test_short_identical_xpi_control_is_flagged_in_verdict_and_cli(self):
+        rows = []
+        for pair in range(3):
+            for name, mib in (("stock", 60), ("synthetic", 70)):
+                reading = sample(name, mib)
+                reading["settle_seconds_after_filter_readiness"] = 2
+                rows.append((pair, name, reading))
+        report = summarize_pairs(rows, mode="build")
+        self.assertEqual(report["condition_labels"], {
+            "stock": "control-A", "synthetic": "control-B"
+        })
+        self.assertTrue(report["identical_xpi_negative_control"])
+        self.assertIn("EXPLORATORY", report["verdict"])
+        self.assertIn("IDENTICAL-XPI NEGATIVE CONTROL", report["verdict"])
+        with tempfile.TemporaryDirectory() as directory:
+            with (patch("memory_experiment.PRIVATE_DIR", Path(directory)),
+                  patch("memory_experiment.capture", return_value=sample("stock", 60)),
+                  redirect_stdout(StringIO())):
+                outcome = main([
+                    "--addon", "same.xpi", "--candidate-addon", "same.xpi",
+                    "--pairs", "1", "--settle-seconds", "2",
+                    "--base-network-filters", "600000",
+                ])
+            self.assertEqual(outcome, 0)
+            saved = json.loads(next(Path(directory).glob("paired-memory-*.json")).read_text())
+            self.assertEqual(saved["conditions"],
+                             "identical XPI in both positions; same-build negative control")
+
+    def test_noisy_pairs_report_spread_and_no_directional_signal(self):
+        readings = ((50.0, 60.0), (60.0, 50.0), (55.0, 55.0),
+                    (52.0, 53.0), (54.0, 52.0), (56.0, 57.0))
+        rows = [
+            (i, name, sample(name, pair[0 if name == "stock" else 1]))
+            for i, pair in enumerate(readings)
+            for name in ("stock", "synthetic")
+        ]
+        stats = summarize_pairs(rows)["paired_uncertainty"]
+        self.assertEqual(stats["paired_delta_range_mib"], [-10.0, 10.0])
+        self.assertEqual(stats["exact_two_sided_sign_test_p"], 1.0)
+        self.assertFalse(stats["directional_process_signal"])
+
     def test_three_pairs_without_five_minutes_remain_exploratory(self):
         rows = []
         for pair in range(3):

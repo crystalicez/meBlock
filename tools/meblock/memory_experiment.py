@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import json
 import math
 from pathlib import Path
+import random
 import statistics
 
 from capture_memory import PRIVATE_DIR, ROOT, RULE_MIXES, SAFE_PROCESS_CATEGORIES, capture
@@ -16,6 +17,40 @@ def schedule(pairs):
         order = ("stock", "synthetic") if index % 2 == 0 else ("synthetic", "stock")
         for condition in order:
             yield index, condition
+
+
+def paired_delta_statistics(deltas, *, resamples=4000, seed=20261019):
+    values = [row["delta_mib"] for row in deltas]
+    if not values or any(
+        type(x) not in (float, int) or not math.isfinite(x) for x in values
+    ):
+        raise ValueError("Paired RAM deltas must be finite")
+    median = statistics.median(values)
+    deviations = [abs(x - median) for x in values]
+    positives = sum(x > 0 for x in values)
+    negatives = sum(x < 0 for x in values)
+    nonzero = positives + negatives
+    tails = min(positives, negatives)
+    sign_p = min(1.0, 2 * sum(math.comb(nonzero, k) for k in range(tails + 1)) /
+                 2 ** nonzero) if nonzero else 1.0
+    rng = random.Random(seed)
+    bootstraps = sorted(
+        statistics.median(rng.choices(values, k=len(values))) for _ in range(resamples)
+    )
+    lower = bootstraps[int((resamples - 1) * 0.025)]
+    upper = bootstraps[int((resamples - 1) * 0.975)]
+    return {
+        "paired_delta_range_mib": [min(values), max(values)],
+        "paired_delta_median_absolute_deviation_mib": round(
+            statistics.median(deviations), 3
+        ),
+        "paired_delta_bootstrap_95_interval_mib": [round(lower, 3), round(upper, 3)],
+        "bootstrap_resamples": resamples,
+        "exact_two_sided_sign_test_p": round(sign_p, 6),
+        "directional_process_signal": (
+            len(values) >= 6 and sign_p < 0.05 and (lower > 0 or upper < 0)
+        ),
+    }
 
 
 def summarize_pairs(rows, mode="rule-count"):
@@ -111,11 +146,33 @@ def summarize_pairs(rows, mode="rule-count"):
         raise ValueError("Source XPI changed across experimental pairs")
     if mode == "rule-count" and source_inputs["stock"] != source_inputs["synthetic"]:
         raise ValueError("Input XPI changed between baseline and synthetic workload")
+    identical_xpi_control = (
+        mode == "build" and source_inputs["stock"] == source_inputs["synthetic"]
+    )
+    uncertainty = paired_delta_statistics(deltas)
+    if len(deltas) < 3:
+        verdict = "EXPLORATORY: fewer than three independent pairs"
+    elif min(settling) < 300:
+        verdict = "EXPLORATORY: post-readiness idle time shorter than 300 seconds"
+    elif identical_xpi_control:
+        verdict = "CONTROL: identical XPI; process noise only, not an optimization"
+    elif not uncertainty["directional_process_signal"]:
+        verdict = "MEASURED: process-wide samples; directional difference unproven"
+    else:
+        verdict = (
+            "MEASURED: directional process-wide signal only; "
+            "no per-extension optimization claim"
+        )
+    if identical_xpi_control and verdict.startswith("EXPLORATORY"):
+        verdict += "; IDENTICAL-XPI NEGATIVE CONTROL, NOT AN OPTIMIZATION"
     return {
         "comparison_mode": mode,
+        "identical_xpi_negative_control": identical_xpi_control,
+        "paired_uncertainty": uncertainty,
         "condition_labels": {
-            "stock": "baseline",
-            "synthetic": "candidate" if mode == "build" else "synthetic-filter-volume",
+            "stock": "control-A" if identical_xpi_control else "baseline",
+            "synthetic": ("control-B" if identical_xpi_control else
+                          "candidate" if mode == "build" else "synthetic-filter-volume"),
         },
         "pairs": len(deltas),
         "minimum_settle_seconds": min(settling),
@@ -126,13 +183,7 @@ def summarize_pairs(rows, mode="rule-count"):
         "median_paired_delta_mib": round(statistics.median(
             row["delta_mib"] for row in deltas), 3),
         "per_pair": deltas,
-        "verdict": (
-            "EXPLORATORY: fewer than three independent pairs"
-            if len(deltas) < 3 else
-            "EXPLORATORY: post-readiness idle time shorter than 300 seconds"
-            if min(settling) < 300 else
-            "MEASURED: process-wide difference only; no per-extension optimization claim"
-        ),
+        "verdict": verdict,
     }
 
 
@@ -188,6 +239,8 @@ def main(argv=None):
                 for _, condition, data in rows if condition == "synthetic"
             )
         summary["conditions"] = (
+            "identical XPI in both positions; same-build negative control"
+            if summary["identical_xpi_negative_control"] else
             "baseline XPI vs candidate XPI; both use equal pinned filter counts"
             if mode == "build" else
             "same XPI with and without additional synthetic "

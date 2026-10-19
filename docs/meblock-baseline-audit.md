@@ -19,6 +19,7 @@ measurement**. No performance change is justified solely by that estimate.
 | The extra 600,000 test rules really compile | Verified for the current synthetic fixture | Stock XPI: 252,243 network rules; same XPI plus 600,000 unique hostname rules: **852,243**; 44,192 cosmetic rules and ten selected filter lists in both. Counts were read directly from the running extension, not inferred from ZIP contents |
 | Fast engine-owned buffer footprint | Verified for one pinned public fixture in real Firefox | A test-only read-only probe measures `filter_data` plus three trie backing buffers and WASM flags, with numeric schema and repeated-run stability checks. After disabling automatic filter updates **only in disposable test builds**, three independent Firefox sessions per identical build all reported 17.5 MiB of the four known buffers at 252,250 compiled network filters; the same-build delta was zero. These counters omit JS objects, other filter engines and native overhead; they are **not total extension RAM** |
 | Memory process measurement | Verified, but **process-wide** | `analyze_memory.py` validates unit=bytes, reads raw Firefox JSON.gz, sums leaf reporters without parent+child duplication and rejects incomplete scopes. Extensions-process `explicit` is **not** the extension's private retained memory |
+| Paired memory uncertainty and null controls | Verified in local tests and a real short Firefox null control | Reports paired delta range, median absolute deviation, deterministic bootstrap interval and exact two-sided sign-test p-value. Three pairs alone cannot justify a directional claim. Identical-XPI build mode is explicitly flagged as a negative control, even if the apparent difference is large. A directional process-wide signal requires at least six independent 300-second pairs and additional checks; it is never per-addon attribution |
 | Reproducible steady-state A/B memory | **Not yet** | An exploratory online 5-minute pair showed 57.621 vs 72.851 MiB for the whole Extensions process, but filter readiness and stable counts were not validated then. Later strict tests detected filter-list changes during capture, including a 600,000-to-600,122 network-count drift after five minutes **despite offline mode**. The capture tool now additionally persists `autoUpdate=false` in each disposable profile and fails closed when rules change; it requires independently matched 5-minute AB/BA pairs before any RAM claim |
 | 600k production-like filter composition | **Partially exercised, not representative** | The original 600k fixture uses hostname rules. The optional deterministic `mixed-network` fixture adds hostname, path, script, image/third-party and regex filters to test different network parser shapes. It does **not** represent the actual user's cosmetic, scriptlet or network-rule proportions; no personal subscriptions are copied |
 | Request latency confidence | **Not yet** | Existing benchmarking reports per-session means and paired uncertainty; no representative **request-level p95** or rigorous end-to-end page-load performance. Claiming "no slowdown" requires this |
@@ -70,6 +71,14 @@ measurement**. No performance change is justified solely by that estimate.
   reported 59.944 versus 56.940 MiB (**−3.004 MiB, −5.011%**) of
   Extensions-process memory. This is **environmental/runtime variation,
   not an improvement**. The verdict remains EXPLORATORY.
+- A three-pair same-XPI **two-second** negative control in six real isolated
+  Firefox profiles passed with exactly 252,243 network filters, 44,192
+  cosmetic filters and stable selected-list fingerprints. The whole
+  Extensions-process paired differences ranged from **-2.448 to +7.155 MiB**,
+  with a paired median absolute deviation of **3.786 MiB** and two-sided
+  sign-test p-value **1.0**. The summary correctly identified identical
+  XPI inputs, reported the interval and marked the run **EXPLORATORY**.
+  This is startup/runtime noise, not an optimization measurement.
 - The analyzer can additionally report numeric allowlisted process-level
   categories such as `window-objects` and `js-non-window` without
   exposing private reporter paths. These categories cannot yet isolate
