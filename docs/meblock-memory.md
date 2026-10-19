@@ -31,6 +31,40 @@ other browsing metadata. Consider Firefox's **anonymize** option before
 sharing them; it may also make reporter names harder to identify.
 The analyzer below processes files locally and does not upload them.
 
+## Capture a report without using your personal Firefox profile
+
+The optional local capture tool uses Selenium to launch a **new temporary
+Firefox profile**, installs only the specified test XPI, and invokes Mozilla's
+built-in memory reporter with **anonymization on** and **GC/minimization off**.
+It never reads the regular Firefox profile. The output is written only under
+ignored `dist/build/private-memory/` and must never be uploaded, committed
+or attached to a public issue.
+
+```powershell
+python tools/meblock/capture_memory.py --settle-seconds 300
+```
+
+To exercise a separate **synthetic**, roughly 600,000-rule workload, append
+600,000 deterministic public hostname rules to a throwaway copy of the built
+XPI. This is *additional* to the filter lists already enabled in the package;
+it does **not** reproduce anyone's own set of 600k subscriptions.
+
+```powershell
+python tools/meblock/capture_memory.py --settle-seconds 300 --extra-synthetic-hostnames 600000
+```
+
+Firefox system-level scripting is enabled **only** in this isolated test
+session via geckodriver's `--allow-system-access` flag so the tool can ask
+`nsIMemoryInfoDumper` to write a full anonymized JSON.gz report. The driver
+remains loopback-only and is shut down after the capture. No change is made
+to a production extension build. Do not run this tool against a personal
+Firefox profile.
+
+This report is not guaranteed to correspond to the about:memory 60 MB seen
+in a regular Firefox profile. Real filter-list composition, actual enabled
+filter count, background pages, tab activity and extension preference state
+affect the result.
+
 ## Analyze and compare reports
 
 First find reporter paths relevant to the extension, using the exact file

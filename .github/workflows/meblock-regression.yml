@@ -36,6 +36,8 @@ jobs:
           python-version: "3.13"
       - name: Install benchmark dependencies
         run: python -m pip install "selenium>=4.30,<5" "psutil>=6,<9"
+      - name: Guard public repository artifacts
+        run: python tools/meblock/check_public_artifacts.py
       - name: Unit regression tests
         run: python -m unittest discover -s tools/meblock -p "test_*.py" -v
       - name: Test-only browser probe syntax
@@ -84,13 +86,5 @@ jobs:
         run: python tools/meblock/filtering_benchmark.py synthetic --count 1500 --seed 20261018 --out dist/build/ci-browser-requests.json
       - name: Compare real Firefox builds
         run: python tools/meblock/compare_original.py --dataset dist/build/ci-browser-requests.json --runs 1 --timeout 180
-      - name: Save regression evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: firefox-regression-evidence
-          if-no-files-found: warn
-          retention-days: 7
-          path: |
-            dist/build/meblock-comparison/**/report.json
-            dist/build/meblock-comparison/**/*-run-*.json
+      # Raw diagnostic reports may contain URLs, extension details, and private
+      # paths. Never publish them as GitHub Actions artifacts in a public repo.

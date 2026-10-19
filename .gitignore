@@ -5,3 +5,27 @@ node_modules/
 /dist/build/
 /tmp/
 .DS_Store
+
+# Local context. NEVER publish or force-add.
+/HANDOFF-NEXT-SESSION.md
+
+# Private Firefox reports, profiles, and debug artifacts; never upload raw reports.
+/memory-reports/
+/private/
+/profiles/
+/.audit/
+*.json.gz
+*.memory.json
+*.memory-report*
+*.heapsnapshot
+*.cpuprofile
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.dmp
+*.log
+*.har
+*.netlog
+*.profraw
+*.profdata
+*.trace
