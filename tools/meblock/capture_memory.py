@@ -203,7 +203,14 @@ def synthetic_xpi(source, target, count):
             clone.writestr(original.getinfo(name), data)
 
 
-def extension_process_explicit_mib(reports):
+SAFE_PROCESS_CATEGORIES = (
+    "window-objects", "js-non-window", "dom", "images",
+    "layout", "heap-overhead", "storage", "wasm",
+)
+
+
+def extension_process_explicit_summary(reports):
+    """Public-safe numeric buckets for the whole Extensions process, never URLs."""
     processes = {
         row.get("process")
         for row in reports
@@ -217,7 +224,24 @@ def extension_process_explicit_mib(reports):
         scope = subtree_summary(reports, "explicit", process_contains=processes.pop())
     except ValueError:
         return None
-    return scope["mib"] if scope["unavailable_byte_reporters"] == 0 else None
+    if scope["unavailable_byte_reporters"] != 0:
+        return None
+    groups = scope["by_category_bytes"]
+    values = {
+        name: round(groups[name] / 1048576, 3)
+        for name in SAFE_PROCESS_CATEGORIES if groups.get(name, 0) > 0
+    }
+    included = sum(groups.get(name, 0) for name in SAFE_PROCESS_CATEGORIES)
+    values["other_process_allocations"] = round((scope["bytes"] - included) / 1048576, 3)
+    return {
+        "total_mib": scope["mib"],
+        "safe_process_categories_mib": values,
+    }
+
+
+def extension_process_explicit_mib(reports):
+    result = extension_process_explicit_summary(reports)
+    return result["total_mib"] if result is not None else None
 
 
 def capture(addon, firefox, settle_seconds, extra_rules=0, samples=1,
@@ -305,13 +329,14 @@ def capture(addon, firefox, settle_seconds, extra_rules=0, samples=1,
             result = json.loads(source)
             if not isinstance(result.get("reports"), list) or not result["reports"]:
                 raise RuntimeError("Firefox returned empty memory report")
-            explicit = extension_process_explicit_mib(result["reports"])
-            if explicit is None:
+            profile = extension_process_explicit_summary(result["reports"])
+            if profile is None:
                 raise RuntimeError("Extensions process explicit memory is ambiguous or incomplete")
             captured.append({
                 "name": filename,
                 "reporter_count": len(result["reports"]),
-                "extension_process_explicit_mib": explicit,
+                "extension_process_explicit_mib": profile["total_mib"],
+                "safe_process_categories_mib": profile["safe_process_categories_mib"],
             })
             print(f"Captured anonymized about:memory report #{index+1} ({len(result['reports'])} reporters)", flush=True)
         final_state = read_engine_state(browser, expected, 0, None)

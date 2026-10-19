@@ -8,7 +8,8 @@ from unittest.mock import patch
 from zipfile import ZipFile
 
 from capture_memory import (
-    BUILT_IN_LIST, extension_process_explicit_mib, synthetic_xpi,
+    BUILT_IN_LIST, extension_process_explicit_mib,
+    extension_process_explicit_summary, synthetic_xpi,
     validated_engine_state, wait_for_stable_engine,
 )
 
@@ -57,6 +58,25 @@ class CaptureMemoryTests(unittest.TestCase):
         ]
         self.assertEqual(extension_process_explicit_mib(data), 20.0)
         self.assertIsNone(extension_process_explicit_mib([]))
+
+    def test_process_breakdown_never_exposes_reporter_paths(self):
+        private = "unrelated-private-information.example.invalid"
+        reports = [
+            {"process": "Extensions (pid 100)", "path": f"explicit/window-objects/{private}",
+             "units": 0, "amount": 8 * 1048576},
+            {"process": "Extensions (pid 100)", "path": f"explicit/js-non-window/{private}",
+             "units": 0, "amount": 12 * 1048576},
+            {"process": "Extensions (pid 100)", "path": f"explicit/other/{private}",
+             "units": 0, "amount": 5 * 1048576},
+        ]
+        summary = extension_process_explicit_summary(reports)
+        self.assertEqual(summary["total_mib"], 25)
+        self.assertEqual(
+            summary["safe_process_categories_mib"],
+            {"window-objects": 8, "js-non-window": 12,
+             "other_process_allocations": 5},
+        )
+        self.assertNotIn(private, str(summary))
 
     def test_engine_readiness_and_exact_filter_count(self):
         report = {

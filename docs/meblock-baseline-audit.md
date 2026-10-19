@@ -51,6 +51,28 @@ measurement**. No performance change is justified solely by that estimate.
   Its verdict was correctly **EXPLORATORY: fewer than three independent
   pairs**. These two-second observations are not steady-state RAM figures
   and do not prove performance or memory optimization.
+- A **strictly paired five-minute** stock-versus-600k run also completed
+  successfully on Firefox 157.0 in two fresh profiles, with automatic
+  updates disabled and identical enabled-list fingerprint and package
+  source hash. It recorded **54.510 MiB** at 252,243 network rules and
+  **63.593 MiB** at exactly 600,000 network rules: one observed paired
+  difference of **+9.083 MiB (+16.663%)** in Extensions-process
+  `explicit` memory. The runner correctly marked this as
+  **EXPLORATORY** because one pair is insufficient for a reliable
+  steady-state difference; it is not per-extension retained memory or
+  a candidate optimization result.
+- The paired runner now supports **two separate uninstrumented XPIs**
+  (original versus fork) with identical filter counts, selected-list
+  fingerprints and browser versions. A **negative-control real Firefox
+  smoke** compared the **exact same XPI against itself** in two fresh
+  profiles after two seconds. It passed input correctness gates but
+  reported 59.944 versus 56.940 MiB (**−3.004 MiB, −5.011%**) of
+  Extensions-process memory. This is **environmental/runtime variation,
+  not an improvement**. The verdict remains EXPLORATORY.
+- The analyzer can additionally report numeric allowlisted process-level
+  categories such as `window-objects` and `js-non-window` without
+  exposing private reporter paths. These categories cannot yet isolate
+  WASM or JS allocations belonging uniquely to this extension.
 - All raw reports and disposable synthetic XPI packages remain beneath
   Git-ignored `dist/build/private-memory/`. No raw reporting paths or
   browser URLs are included in this public audit.

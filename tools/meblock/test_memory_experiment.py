@@ -11,6 +11,7 @@ def sample(condition, mib, *, selection="stable", source="sha-stock", version="1
         "filter_engine": {
             "selected_lists_sha256": selection,
             "cosmetic_filters": 44192,
+            "network_filters": 600000,
             "auto_update": False,
         },
         "source_package_sha256": source,
@@ -87,6 +88,64 @@ class PairedMemoryTests(unittest.TestCase):
                 (1, "synthetic", sample("synthetic", 66, selection="changed")),
                 (1, "stock", sample("stock", 51, selection="changed")),
             ])
+
+    def test_distinct_builds_match_on_equal_filter_counts(self):
+        comparison = summarize_pairs([
+            (0, "stock", sample("stock", 60, source="upstream-hash")),
+            (0, "synthetic", sample("synthetic", 57, source="candidate-hash")),
+        ], mode="build")
+        self.assertEqual(comparison["comparison_mode"], "build")
+        self.assertEqual(comparison["median_paired_delta_mib"], -3)
+        self.assertIn("EXPLORATORY", comparison["verdict"])
+
+    def test_distinct_builds_must_load_same_network_count(self):
+        newer = sample("synthetic", 57, source="candidate-hash")
+        newer["filter_engine"]["network_filters"] = 599999
+        with self.assertRaisesRegex(ValueError, "compiled network filter counts"):
+            summarize_pairs([
+                (0, "stock", sample("stock", 60, source="upstream-hash")),
+                (0, "synthetic", newer),
+            ], mode="build")
+
+    def test_distinct_builds_must_pin_each_source_across_pairs(self):
+        with self.assertRaisesRegex(ValueError, "Source XPI changed"):
+            summarize_pairs([
+                (0, "stock", sample("stock", 60, source="upstream-hash")),
+                (0, "synthetic", sample("synthetic", 57, source="candidate-one")),
+                (1, "stock", sample("stock", 60, source="upstream-hash")),
+                (1, "synthetic", sample("synthetic", 57, source="candidate-two")),
+            ], mode="build")
+
+    def test_unknown_comparison_mode_refused(self):
+        with self.assertRaisesRegex(ValueError, "Unknown"):
+            summarize_pairs([], mode="unsupported")
+
+    def test_nonfinite_memory_measurements_are_refused(self):
+        for invalid in (float("nan"), float("inf"), -float("inf")):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(ValueError, "positive finite"):
+                    summarize_pairs([
+                        (0, "stock", sample("stock", invalid)),
+                        (0, "synthetic", sample("synthetic", 60)),
+                    ])
+
+    def test_safe_category_deltas_do_not_leak_arbitrary_reporter_names(self):
+        upstream = sample("stock", 60)
+        fork = sample("synthetic", 62)
+        upstream["captures"][0]["safe_process_categories_mib"] = {
+            "window-objects": 50, "other_process_allocations": 10,
+            "private-untrusted-host.example.invalid": 1,
+        }
+        fork["captures"][0]["safe_process_categories_mib"] = {
+            "window-objects": 53, "other_process_allocations": 9,
+            "private-untrusted-host.example.invalid": 77,
+        }
+        result = summarize_pairs([(0, "stock", upstream), (0, "synthetic", fork)])
+        aggregate = result["per_pair"][0]["safe_process_category_deltas_mib"]
+        self.assertEqual(aggregate, {
+            "window-objects": 3, "other_process_allocations": -1
+        })
+        self.assertNotIn("private-untrusted-host", str(result))
 
     def test_missing_memory_measurement_refused(self):
         with self.assertRaisesRegex(ValueError, "positive"):

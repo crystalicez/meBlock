@@ -4,10 +4,11 @@
 import argparse
 from datetime import datetime, timezone
 import json
+import math
 from pathlib import Path
 import statistics
 
-from capture_memory import PRIVATE_DIR, ROOT, capture
+from capture_memory import PRIVATE_DIR, ROOT, SAFE_PROCESS_CATEGORIES, capture
 
 
 def schedule(pairs):
@@ -17,7 +18,9 @@ def schedule(pairs):
             yield index, condition
 
 
-def summarize_pairs(rows):
+def summarize_pairs(rows, mode="rule-count"):
+    if mode not in ("rule-count", "build"):
+        raise ValueError("Unknown baseline comparison mode")
     paired = {}
     for pair, condition, data in rows:
         slot = paired.setdefault(pair, {})
@@ -29,8 +32,9 @@ def summarize_pairs(rows):
         if not isinstance(snapshots, list) or len(snapshots) != 1:
             raise ValueError("A paired run requires exactly one memory report")
         reading = snapshots[0].get("extension_process_explicit_mib")
-        if type(reading) not in (int, float) or reading <= 0:
-            raise ValueError("Missing positive Extensions process memory measurement")
+        if (type(reading) not in (int, float)
+            or not math.isfinite(reading) or reading <= 0):
+            raise ValueError("Missing positive finite Extensions process memory measurement")
         slot[condition] = data
 
     deltas = []
@@ -39,9 +43,14 @@ def summarize_pairs(rows):
             raise ValueError("Incomplete A/B pair")
         original = conditions["stock"]
         amended = conditions["synthetic"]
-        if (original["source_package_sha256"] != amended["source_package_sha256"]
-            or original["firefox_version"] != amended["firefox_version"]):
+        if original["firefox_version"] != amended["firefox_version"]:
             raise ValueError("Firefox or source XPI differs between conditions")
+        if (mode == "rule-count" and
+            original["source_package_sha256"] != amended["source_package_sha256"]):
+            raise ValueError("Firefox or source XPI differs between conditions")
+        if (mode == "build" and original["filter_engine"]["network_filters"] !=
+            amended["filter_engine"]["network_filters"]):
+            raise ValueError("Build comparison requires identical compiled network filter counts")
         if (original["filter_engine"]["selected_lists_sha256"] !=
             amended["filter_engine"]["selected_lists_sha256"]):
             raise ValueError("Selected filter-list fingerprint differs between conditions")
@@ -50,18 +59,33 @@ def summarize_pairs(rows):
             raise ValueError("Cosmetic filtering engine differs between conditions")
         base = original["captures"][0]["extension_process_explicit_mib"]
         test = amended["captures"][0]["extension_process_explicit_mib"]
-        deltas.append({
+        summary = {
             "pair": pair + 1,
             "stock_extensions_process_explicit_mib": base,
             "synthetic_extensions_process_explicit_mib": test,
             "delta_mib": round(test - base, 3),
             "delta_percent": round((test / base - 1) * 100, 3),
-        })
+        }
+        baseline_groups = original["captures"][0].get("safe_process_categories_mib")
+        candidate_groups = amended["captures"][0].get("safe_process_categories_mib")
+        if isinstance(baseline_groups, dict) and isinstance(candidate_groups, dict):
+            allowed = (*SAFE_PROCESS_CATEGORIES, "other_process_allocations")
+            for group in allowed:
+                values = (baseline_groups.get(group, 0), candidate_groups.get(group, 0))
+                if any(type(value) not in (int, float) or not math.isfinite(value)
+                       for value in values):
+                    raise ValueError("Invalid aggregate process memory category")
+            summary["safe_process_category_deltas_mib"] = {
+                group: round(candidate_groups.get(group, 0) -
+                             baseline_groups.get(group, 0), 3)
+                for group in allowed
+                if group in baseline_groups or group in candidate_groups
+            }
+        deltas.append(summary)
     if not deltas:
         raise ValueError("No A/B pairs found")
     all_inputs = {
         (
-            data["source_package_sha256"],
             data["firefox_version"],
             data["filter_engine"]["selected_lists_sha256"],
             data["filter_engine"]["cosmetic_filters"],
@@ -70,7 +94,19 @@ def summarize_pairs(rows):
     }
     if len(all_inputs) != 1:
         raise ValueError("Input XPI, Firefox version or filter lists drifted across pairs")
+    source_inputs = {}
+    for _, condition, data in rows:
+        source_inputs.setdefault(condition, set()).add(data["source_package_sha256"])
+    if any(len(values) != 1 for values in source_inputs.values()):
+        raise ValueError("Source XPI changed across experimental pairs")
+    if mode == "rule-count" and source_inputs["stock"] != source_inputs["synthetic"]:
+        raise ValueError("Input XPI changed between baseline and synthetic workload")
     return {
+        "comparison_mode": mode,
+        "condition_labels": {
+            "stock": "baseline",
+            "synthetic": "candidate" if mode == "build" else "synthetic-filter-volume",
+        },
         "pairs": len(deltas),
         "median_stock_mib": round(statistics.median(
             row["stock_extensions_process_explicit_mib"] for row in deltas), 3),
@@ -90,32 +126,52 @@ def summarize_pairs(rows):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--addon", type=Path, default=ROOT / "dist/build/uBlock0.firefox.xpi")
+    parser.add_argument("--candidate-addon", type=Path,
+                        help="Compare two independently built XPIs instead of changing rule count")
     parser.add_argument("--firefox", type=Path, default=Path(r"C:\Program Files\Mozilla Firefox\firefox.exe"))
     parser.add_argument("--pairs", type=int, default=3)
     parser.add_argument("--settle-seconds", type=float, default=300)
     parser.add_argument("--base-network-filters", type=int, required=True)
-    parser.add_argument("--extra-synthetic-hostnames", type=int, required=True)
+    parser.add_argument("--extra-synthetic-hostnames", type=int, default=0)
     args = parser.parse_args(argv)
     if (args.pairs < 1 or args.settle_seconds < 0 or
-        args.base_network_filters < 1 or args.extra_synthetic_hostnames < 1):
-        parser.error("Invalid number of pairs, time or filters")
+        args.base_network_filters < 1 or args.extra_synthetic_hostnames < 0 or
+        (args.candidate_addon is None and args.extra_synthetic_hostnames == 0)):
+        parser.error("Invalid number of pairs, time, filter count or comparison mode")
+    mode = "build" if args.candidate_addon is not None else "rule-count"
     rows = []
     PRIVATE_DIR.mkdir(parents=True, exist_ok=True)
     try:
         for pair, condition in schedule(args.pairs):
-            extra = args.extra_synthetic_hostnames if condition == "synthetic" else 0
+            if mode == "build":
+                addon = args.candidate_addon if condition == "synthetic" else args.addon
+                extra = args.extra_synthetic_hostnames
+            else:
+                addon = args.addon
+                extra = args.extra_synthetic_hostnames if condition == "synthetic" else 0
             expected = args.base_network_filters + extra
-            print(f"Paired baseline {pair + 1}/{args.pairs}, {condition} condition", flush=True)
+            label = "candidate" if mode == "build" and condition == "synthetic" else condition
+            print(f"Paired baseline {pair + 1}/{args.pairs}, {label} condition", flush=True)
             data = capture(
-                args.addon, args.firefox, args.settle_seconds,
+                addon, args.firefox, args.settle_seconds,
                 extra_rules=extra, samples=1, expected_network_filters=expected,
                 offline=True,
             )
             rows.append((pair, condition, data))
-        summary = summarize_pairs(rows)
+        summary = summarize_pairs(rows, mode=mode)
         summary["base_network_filters"] = args.base_network_filters
         summary["extra_synthetic_hostnames"] = args.extra_synthetic_hostnames
         summary["source_package_sha256"] = rows[0][2]["source_package_sha256"]
+        if mode == "build":
+            summary["candidate_source_package_sha256"] = next(
+                data["source_package_sha256"]
+                for _, condition, data in rows if condition == "synthetic"
+            )
+        summary["conditions"] = (
+            "baseline XPI vs candidate XPI; both use equal pinned filter counts"
+            if mode == "build" else
+            "same XPI with and without additional synthetic hostname rules"
+        )
         summary["measurement"] = "whole Firefox Extensions process explicit, not addon-private RAM"
         summary["raw_reports"] = "retained only in ignored dist/build/private-memory"
         name = datetime.now(timezone.utc).strftime("paired-memory-%Y%m%dT%H%M%S%fZ.json")

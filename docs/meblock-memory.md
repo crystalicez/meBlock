@@ -78,6 +78,24 @@ python tools/meblock/memory_experiment.py --pairs 3 --settle-seconds 300 --base-
 
 The paired runner compares the original test XPI and the same XPI with
 the synthetic additions, using a **new Firefox profile for each condition**.
+
+For a **real upstream-versus-fork memory comparison**, use two separate
+uninstrumented XPIs built with the *same pinned filter assets*. This mode
+checks an equal number of compiled network and cosmetic filters, identical
+selected-list fingerprints, a stable source hash per build, and a matching
+Firefox version. Both builds receive the **same** synthetic additions
+when requested; a build-to-build memory test is never confused with a
+stock-versus-more-rules test.
+
+```powershell
+python tools/meblock/memory_experiment.py --addon dist/build/upstream-test.xpi --candidate-addon dist/build/meblock-test.xpi --pairs 3 --settle-seconds 300 --base-network-filters 252243 --extra-synthetic-hostnames 347757
+```
+
+These named example XPI inputs must be built locally first, and the actual
+stock network count must be verified for those packages. Do not use
+`instrumented.xpi` as a production memory baseline. The build comparison
+results are still **Extensions-process-wide**, not private extension heap
+figures.
 It rejects changes in the source XPI hash, Firefox version, enabled list
 fingerprint or cosmetic filter count. It saves a sanitized summary locally
 and never uploads raw reports. Even with three valid pairs, the verdict
@@ -125,6 +143,14 @@ If the identities or reporter roots differ, specify both prefixes explicitly:
 ```powershell
 python tools/meblock/analyze_memory.py compare dist/build/memory/upstream-5m.json.gz dist/build/memory/meblock-5m.json.gz --prefix "explicit/add-ons/uBlock0@raymondhill.net" --after-prefix "explicit/add-ons/meBlock@example.invalid"
 ```
+
+The automated capture also includes a **privacy-safe, allowlisted numeric
+category breakdown** of the Extensions process (for example
+`window-objects` and `js-non-window`). It never copies raw reporter paths,
+hostnames or URLs into that aggregate. The remainder is grouped as
+`other_process_allocations`. These buckets are **not** per-extension
+allocations and must not be interpreted as a unique JS/WASM/native breakdown
+without additional profiling.
 
 The tool reads Mozilla's compressed or plain JSON memory reports. It counts
 only byte-valued measurements and sums **leaf reporters** rather than adding
