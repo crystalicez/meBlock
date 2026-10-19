@@ -65,8 +65,25 @@ first-party and third-party document. All URLs are fed to uBO's static
 network matcher **without fetching those hostnames**. Neither tool injects
 a filter into the measured default-list builds in this mode.
 
+For stricter coverage tied to the **actual enabled list selection**, pass
+a prior **private disposable Firefox run** to the generator:
+
+```powershell
+python tools/meblock/default_rule_probes.py --addon dist/build/uBlock0.firefox.xpi --selected-run dist/build/meblock-comparison/SESSION/upstream-run-1.json --shards 256 --shard-index 0
+```
+
+Replace `SESSION` with the local ignored session directory. The generator
+uses the XPI's public list registry to map the browser's selected list keys
+to packaged public asset files. It records only a **SHA-256 of the selected
+keys** and aggregate counts, not the raw list keys or any browser URLs.
+The comparator checks that hash against every live Firefox run. This prevents
+accidentally treating disabled bundled lists as selected. Currently the
+default Firefox profile selects 10 lists, of which **eight map to bundled
+public assets**; two do not have a packaged public text source in this
+XPI. Their rules are **outside this generator's coverage**, even if active.
+
 Deterministic, disjoint shards are indexed from zero. All rule candidates
-from the bundled files are assigned exactly once across the chosen shard
+from the chosen bundled files are assigned exactly once across the chosen shard
 count; each run checks every generated request decision and modifier mask
 against the pinned upstream engine. The generator fails when a selected
 shard would exceed its safe request cap. Run other `--shard-index`
@@ -98,7 +115,10 @@ python tools/meblock/compare_original.py --default-lists --dataset dist/build/me
 regression fixture. Both test builds still receive **identical disposable
 measurement probes** and have automatic filter updates disabled to keep
 the comparison pinned; they are not release XPIs suitable for total-RAM
-measurement. The request dataset is synthetic traffic, but the matching
+measurement. Only these disposable, instrumented comparison profiles also set
+`privacy.reduceTimerPrecision=false` to allow microsecond-scale
+matcher diagnostics; this is not applied to production Firefox profiles.
+The request dataset is synthetic traffic, but the matching
 engine uses the actual default enabled lists. It checks each dataset
 request's decision and modifier mask against upstream, **not the
 behavior of every enabled filter rule under every possible context**.
@@ -126,6 +146,7 @@ For retained RAM use **uninstrumented** XPIs with
 | Settings reload and restore | Toggle real `colorBlindFriendly` user setting, persist, reload disposable extension, then restore | Fails if persisted value does not survive the reload or cannot be restored |
 | Built-in extra benchmarks | Cosmetic and scriptlet benchmarking where dataset contains document requests | Separate diagnostic timings |
 | Performance | Two in-session warm-ups and five measured engine passes, repeated across alternating A/B sessions | Median and range, per-pair percentage change, paired bootstrap interval, byte-identical control verdict; at least 10 A/B pairs required for a timing candidate |
+| Request matcher p95 | Three additional instrumented passes sample every `matchRequest` call with two `performance.now()` reads; the page context is prepared before timing | Per-run nearest-rank p50/p95/p99, zero-sample count, inferred clock step and empty timer-pair overhead. The diagnostic p95 is withheld if it is fewer than three clock steps, or mostly zero samples. **Instrumented wall time**, not addon CPU, actual request lifetime, or production website p95 |
 | Local page navigation p95 | Two warm-up and 20 measured loopback fixture navigations per Firefox session, checked against the complete expected browser behavior | Firefox `loadEventEnd` and DOMContentLoaded p95, with strict sample validation. Includes browser overhead and is not real-site or request-level p95 |
 | Startup diagnostics | Extension-reported engine-ready time, when available | Recorded separately from filtering speed; not browser startup overhead |
 | Firefox processes | Optional idle CPU time and summed RSS after benchmark | Diagnostic only; not per-extension attribution |

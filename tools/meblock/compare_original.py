@@ -401,6 +401,10 @@ def firefox_run(xpi, role, state, driver_binary, firefox_binary,
         "app.update.auto": False,
         "extensions.update.enabled": False,
         "toolkit.telemetry.enabled": False,
+        # Disposable benchmark profiles only. Default Firefox rounds
+        # performance.now() to ~1ms, so microsecond samples otherwise
+        # degenerate to 0 or 1000us and cannot estimate matcher p95.
+        "privacy.reduceTimerPrecision": False,
     }.items():
         options.set_preference(name, value)
     service = Service(executable_path=driver_binary) if driver_binary else Service()
@@ -502,6 +506,84 @@ def summarize_role(series):
     return summary
 
 
+REQUEST_LATENCY_KEYS = (
+    "schema", "clock_step_us", "sample_count", "passes", "zero_sample_count",
+    "min_us", "median_us", "p95_us", "p99_us", "max_us",
+    "empty_timer_pair_median_us", "empty_timer_pair_p95_us",
+)
+
+
+def summarize_request_latency(series, request_count):
+    readings = [row.get("request_latency") for row in series]
+    if all(reading is None for reading in readings):
+        return None
+    for reading in readings:
+        if (
+            not isinstance(reading, dict)
+            or set(reading) != set(REQUEST_LATENCY_KEYS)
+            or reading["schema"] != "meblock-request-latency-v2"
+            or type(reading["passes"]) is not int or reading["passes"] < 1
+            or type(reading["sample_count"]) is not int
+            or reading["sample_count"] != reading["passes"] * request_count
+            or type(reading["zero_sample_count"]) is not int
+            or not 0 <= reading["zero_sample_count"] <= reading["sample_count"]
+        ):
+            raise ValueError("Invalid or incomplete request-level latency samples")
+        numeric = (
+            "min_us", "median_us", "p95_us", "p99_us", "max_us",
+            "clock_step_us", "empty_timer_pair_median_us", "empty_timer_pair_p95_us",
+        )
+        if any(
+            type(reading[key]) not in (int, float)
+            or not math.isfinite(reading[key]) or reading[key] < 0
+            for key in numeric
+        ) or not (
+            reading["min_us"] <= reading["median_us"] <= reading["p95_us"]
+            <= reading["p99_us"] <= reading["max_us"]
+            and reading["empty_timer_pair_median_us"] <=
+            reading["empty_timer_pair_p95_us"]
+        ):
+            raise ValueError("Invalid request-level latency percentiles")
+    p95_values = [row["p95_us"] for row in readings]
+    precision_usable = all(
+        reading["clock_step_us"] > 0
+        and reading["p95_us"] >= reading["clock_step_us"] * 3
+        and reading["p95_us"] > reading["empty_timer_pair_p95_us"]
+        and reading["zero_sample_count"] / reading["sample_count"] < 0.85
+        for reading in readings
+    )
+    return {
+        "runs": len(readings),
+        "samples_per_run": readings[0]["sample_count"],
+        "passes_per_run": readings[0]["passes"],
+        "precision_usable_for_instrumented_screening": precision_usable,
+        "median_run_p95_us": (
+            round(statistics.median(p95_values), 4) if precision_usable else None
+        ),
+        "range_run_p95_us": (
+            [round(min(p95_values), 4), round(max(p95_values), 4)]
+            if precision_usable else None
+        ),
+        "max_zero_sample_fraction": round(max(
+            row["zero_sample_count"] / row["sample_count"] for row in readings
+        ), 5),
+        "timer_pair_p95_range_us": [
+            round(min(row["empty_timer_pair_p95_us"] for row in readings), 4),
+            round(max(row["empty_timer_pair_p95_us"] for row in readings), 4),
+        ],
+        "timer_step_range_us": [
+            round(min(row["clock_step_us"] for row in readings), 4),
+            round(max(row["clock_step_us"] for row in readings), 4),
+        ],
+        "scope": (
+            "Instrumented individual static-network matchRequest wall time, "
+            "excluding context setup, including two performance.now calls. "
+            "Timer overhead, quantization, scheduling and probe effects remain; "
+            "not browser request lifetime, actual CPU time, or production website p95."
+        ),
+    }
+
+
 ENGINE_BUFFER_KEYS = ("filter_data", "origin_trie", "destination_trie", "pattern_trie")
 WASM_BUFFER_KEYS = ENGINE_BUFFER_KEYS[1:]
 
@@ -533,9 +615,16 @@ def summarize_engine_buffers(series):
             or type(reading["total_known_allocated_bytes"]) is not int
             or reading["total_known_allocated_bytes"] != sum(buffers.values())):
             raise ValueError("Invalid or inconsistent engine buffer counters")
-    if any(reading != readings[0] for reading in readings[1:]):
-        raise ValueError("Engine buffer footprint drifted between matching test runs")
-    return readings[0]
+    if len({reading["compiled_network_filters"] for reading in readings}) != 1:
+        raise ValueError("Compiled filter count drifted across buffer measurements")
+    unstable = any(reading != readings[0] for reading in readings[1:])
+    totals = [reading["total_known_allocated_bytes"] for reading in readings]
+    return {
+        **readings[0],
+        "unstable_across_profiles": unstable,
+        "observed_known_allocated_range_bytes": [min(totals), max(totals)],
+        "measurement_count": len(readings),
+    }
 
 
 def compare(data, dataset, identical_build=False, *, default_lists=False):
@@ -629,6 +718,19 @@ def compare(data, dataset, identical_build=False, *, default_lists=False):
         else all(isinstance(value, list) and value == filters[0] for value in filters)
     )
     left, right = summarize_role(a), summarize_role(b)
+    request_latency_series = {
+        role: summarize_request_latency(data[role], len(dataset)) for role in ROLES
+    }
+    if ((request_latency_series["upstream"] is None) !=
+        (request_latency_series["meblock"] is None)):
+        raise ValueError("Request-level latency data is missing from one build")
+    request_latency = None
+    if request_latency_series["upstream"] is not None:
+        request_latency = {
+            "upstream": request_latency_series["upstream"],
+            "meblock": request_latency_series["meblock"],
+            "scope": request_latency_series["upstream"]["scope"],
+        }
     navigation_series = {
         label: [row.get("fixture_navigation") for row in data[label]]
         for label in ROLES
@@ -667,14 +769,24 @@ def compare(data, dataset, identical_build=False, *, default_lists=False):
         if (left_buffers["compiled_network_filters"] !=
             right_buffers["compiled_network_filters"]):
             raise ValueError("Different compiled network filter counts between builds")
+        stable = (
+            not left_buffers["unstable_across_profiles"]
+            and not right_buffers["unstable_across_profiles"]
+        )
         engine_buffers = {
             "upstream": left_buffers,
             "meblock": right_buffers,
+            "stable_enough_for_byte_delta": stable,
             "known_allocated_delta_bytes": (
                 right_buffers["total_known_allocated_bytes"] -
                 left_buffers["total_known_allocated_bytes"]
+                if stable else None
             ),
-            "scope": "selected engine-owned typed/WASM buffers only; not total add-on RAM",
+            "scope": (
+                "selected engine-owned typed/WASM buffers only; not total add-on RAM. "
+                "If per-profile buffer capacity drifts, report ranges and withhold a "
+                "single byte delta; never infer an optimization from runtime noise."
+            ),
         }
     matching = (behavior["per_request_match"] and behavior["modifier_per_request_match"]
                 and behavior["aggregate_modifier_counts_match"]
@@ -703,6 +815,7 @@ def compare(data, dataset, identical_build=False, *, default_lists=False):
         "default_enabled_lists_only": default_lists,
         "injected_filter_rules": 0 if default_lists else len(RULES),
         "paired_performance": paired,
+        "request_latency": request_latency,
         "fixture_navigation": fixture_navigation,
         "engine_buffer_footprint": engine_buffers,
         "upstream": left,
@@ -757,9 +870,36 @@ def read_rule_derived_manifest(dataset, payload, rows, default_lists):
     assets = manifest.get("bundled_asset_contents_sha256")
     if not isinstance(assets, str) or re.fullmatch(r"[0-9a-f]{64}", assets) is None:
         raise ValueError("Rule-derived asset digest is invalid")
-    return {key: manifest[key] for key in (
-        "schema", *numbers, "dataset_sha256", "bundled_asset_contents_sha256"
-    )}
+    selected_digest = manifest.get("selected_list_keys_sha256")
+    if selected_digest is not None:
+        if (not isinstance(selected_digest, str) or
+            re.fullmatch(r"[0-9a-f]{64}", selected_digest) is None or
+            type(manifest.get("selected_list_count")) is not int or
+            manifest["selected_list_count"] < 1 or
+            type(manifest.get("selected_without_bundled_asset_count")) is not int or
+            not 0 <= manifest["selected_without_bundled_asset_count"] <=
+                manifest["selected_list_count"]):
+            raise ValueError("Invalid selected default-list provenance")
+    allowed = ("schema", *numbers, "dataset_sha256", "bundled_asset_contents_sha256")
+    allowed += (("selected_list_keys_sha256", "selected_list_count",
+                 "selected_without_bundled_asset_count") if selected_digest is not None
+                else ())
+    return {key: manifest[key] for key in allowed}
+
+
+def verify_pinned_selection(data, derived_coverage):
+    if derived_coverage is None or "selected_list_keys_sha256" not in derived_coverage:
+        return
+    for role in ROLES:
+        for sample in data[role]:
+            selected = sample.get("selected_filter_lists")
+            if (not isinstance(selected, list) or not selected
+                or any(not isinstance(key, str) or not key for key in selected)
+                or len(set(selected)) != len(selected) or
+                hashlib.sha256("\n".join(sorted(selected)).encode("utf-8")
+                               ).hexdigest() !=
+                derived_coverage["selected_list_keys_sha256"]):
+                raise ValueError("Live enabled list selection differs from pinned rule probes")
 
 
 def main():
@@ -877,6 +1017,7 @@ def main():
                 (session_dir / f"{role}-run-{iteration + 1}.json").write_text(
                     json.dumps(result, indent=2) + "\n", encoding="utf-8"
                 )
+        verify_pinned_selection(data, derived_coverage)
         metadata["comparison"] = compare(
             data, dataset, identical_build=metadata["build_delta"]["files_different"] == 0,
             default_lists=args.default_lists,

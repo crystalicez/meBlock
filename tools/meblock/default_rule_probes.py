@@ -6,6 +6,7 @@ rewrites an extension's filters. Each request is evaluated without networking.
 """
 
 import argparse
+from collections import Counter
 import hashlib
 import json
 from pathlib import Path
@@ -46,25 +47,82 @@ def recognized_rule(line):
     return (line, host, matched.group(3))
 
 
-def collect_bundled_rules(archive):
+def mapped_selected_assets(archive, selected_keys):
+    if (
+        not isinstance(selected_keys, list) or not selected_keys
+        or any(not isinstance(key, str) or not key for key in selected_keys)
+        or len(set(selected_keys)) != len(selected_keys)
+    ):
+        raise ValueError("Invalid live selected filter list keys")
+    registry = json.loads(archive.read("assets/assets.dev.json"))
+    available = set(archive.namelist())
+    paths = set()
+    unmapped = 0
+    for key in selected_keys:
+        entry = registry.get(key, {})
+        urls = entry.get("contentURL", []) if isinstance(entry, dict) else []
+        if isinstance(urls, str):
+            urls = [urls]
+        matching = [
+            path for path in urls
+            if isinstance(path, str) and path.startswith("assets/")
+            and path.endswith(".txt") and path in available
+            and path != "assets/ublock/badlists.txt"
+        ]
+        if matching:
+            paths.add(matching[0])
+        else:
+            unmapped += 1
+    if not paths:
+        raise ValueError("No selected filter lists map to packaged public assets")
+    return sorted(paths), {
+        "selected_list_keys_sha256": hashlib.sha256(
+            "\n".join(sorted(selected_keys)).encode("utf-8")
+        ).hexdigest(),
+        "selected_list_count": len(selected_keys),
+        "selected_without_bundled_asset_count": unmapped,
+    }
+
+
+def classify_filter_text_line(line):
+    """Syntax-only coverage categories, not engine compilation status."""
+    if any(token in line for token in ("##+js(", "#@#+js(")):
+        return "scriptlet"
+    if any(token in line for token in ("##", "#@#", "#?#", "#$#")):
+        return "cosmetic_or_html"
+    if line.startswith("@@"):
+        return "network_exception_or_modifier"
+    if line.startswith(("||", "|", "/")):
+        return "network_pattern_or_modifier"
+    return "other_syntax"
+
+
+def collect_bundled_rules(archive, selected_keys=None):
     files = sorted(
         name for name in archive.namelist()
         if name.startswith("assets/") and name.endswith(".txt")
         and name != "assets/ublock/badlists.txt"
     )
+    selection = {}
+    if selected_keys is not None:
+        files, selection = mapped_selected_assets(archive, selected_keys)
     if not files:
         raise ValueError("XPI has no bundled public filter-list text assets")
     eligible = set()
     candidate_lines = 0
+    categories = Counter()
     bundle = hashlib.sha256()
     for name in files:
         data = archive.read(name)
         bundle.update(name.encode("utf-8") + b"\0" + hashlib.sha256(data).digest())
         for line in data.decode("utf-8-sig", errors="replace").splitlines():
             line = line.strip()
-            if not line or line.startswith(("!", "[", "#")):
+            if (not line or line.startswith(("!", "[")) or
+                line.startswith("#") and not
+                line.startswith(("##", "#@#", "#?#", "#$#"))):
                 continue
             candidate_lines += 1
+            categories[classify_filter_text_line(line)] += 1
             if recognized_rule(line) is not None:
                 eligible.add(line)
     return sorted(eligible), {
@@ -73,6 +131,13 @@ def collect_bundled_rules(archive):
         "noncomment_filter_lines": candidate_lines,
         "simple_host_rule_unique": len(eligible),
         "unsupported_or_duplicate_lines": candidate_lines - len(eligible),
+        "syntax_input_line_counts": {
+            key: categories[key] for key in (
+                "network_pattern_or_modifier", "network_exception_or_modifier",
+                "cosmetic_or_html", "scriptlet", "other_syntax",
+            )
+        },
+        **selection,
     }
 
 
@@ -92,14 +157,15 @@ def bundled_asset_fingerprint(build):
     return bundle.hexdigest()
 
 
-def build_probes(archive, *, shard_index, shard_count, max_requests=MAX_REQUESTS):
+def build_probes(archive, *, shard_index, shard_count, max_requests=MAX_REQUESTS,
+                 selected_keys=None):
     if type(shard_count) is not int or shard_count < 1:
         raise ValueError("Shard count must be positive")
     if type(shard_index) is not int or not 0 <= shard_index < shard_count:
         raise ValueError("Shard index must lie within the shard count")
     if type(max_requests) is not int or max_requests < 4:
         raise ValueError("Request cap must be at least four")
-    all_rules, coverage = collect_bundled_rules(archive)
+    all_rules, coverage = collect_bundled_rules(archive, selected_keys=selected_keys)
     shard = [rule for i, rule in enumerate(all_rules) if i % shard_count == shard_index]
     if not shard:
         raise ValueError("Selected shard contains no eligible simple-host rules")
@@ -142,14 +208,27 @@ def main(argv=None):
     parser.add_argument("--out", type=Path, default=BUILD_ROOT / "default-rule-probes.json")
     parser.add_argument("--shards", type=int, default=256)
     parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument(
+        "--selected-run", type=Path,
+        help="Ignored, disposable Firefox run JSON with live selected-filter-list keys",
+    )
     args = parser.parse_args(argv)
     output = args.out.resolve()
     if not output.is_relative_to(BUILD_ROOT.resolve()):
         parser.error("Rule-derived request data must remain inside ignored dist/build")
     try:
+        selected = None
+        if args.selected_run is not None:
+            if not args.selected_run.resolve().is_relative_to(BUILD_ROOT.resolve()):
+                raise ValueError("Selected list evidence must remain inside ignored dist/build")
+            evidence = json.loads(args.selected_run.read_text(encoding="utf-8"))
+            if not isinstance(evidence, dict):
+                raise ValueError("Invalid live Firefox list-selection evidence")
+            selected = evidence.get("selected_filter_lists")
         with ZipFile(args.addon) as archive:
             rows, coverage = build_probes(
-                archive, shard_index=args.shard_index, shard_count=args.shards
+                archive, shard_index=args.shard_index, shard_count=args.shards,
+                selected_keys=selected,
             )
         output.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(rows, separators=(",", ":"), ensure_ascii=False) + "\n"

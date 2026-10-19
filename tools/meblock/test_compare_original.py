@@ -265,6 +265,85 @@ class CompareTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "20 measured loads"):
             runner.compare({"upstream": [source], "meblock": [target]}, DATASET)
 
+    def test_request_latency_nearest_rank_validator_rejects_bad_samples(self):
+        baseline = {
+            "schema": "meblock-request-latency-v2", "clock_step_us": 0.5,
+            "sample_count": 12, "passes": 3, "zero_sample_count": 0,
+            "min_us": 1.0, "median_us": 2.0, "p95_us": 4.0,
+            "p99_us": 5.0, "max_us": 6.0,
+            "empty_timer_pair_median_us": 0.2,
+            "empty_timer_pair_p95_us": 0.5,
+        }
+        rows = [{"request_latency": deepcopy(baseline)} for _ in range(2)]
+        summary = runner.summarize_request_latency(rows, 4)
+        self.assertEqual(summary["samples_per_run"], 12)
+        self.assertEqual(summary["median_run_p95_us"], 4.0)
+        self.assertTrue(summary["precision_usable_for_instrumented_screening"])
+        self.assertEqual(summary["timer_pair_p95_range_us"], [0.5, 0.5])
+        quantized = deepcopy(baseline)
+        quantized.update({
+            "zero_sample_count": 11, "min_us": 0, "median_us": 0,
+            "p95_us": 0, "p99_us": 1000, "max_us": 1000,
+            "empty_timer_pair_median_us": 0, "empty_timer_pair_p95_us": 0,
+        })
+        coarse = runner.summarize_request_latency([
+            {"request_latency": quantized}
+        ], 4)
+        self.assertFalse(coarse["precision_usable_for_instrumented_screening"])
+        self.assertIsNone(coarse["median_run_p95_us"])
+        for field, wrong in (
+            ("sample_count", 11), ("passes", 0),
+            ("zero_sample_count", 13), ("p95_us", 1.5),
+            ("p99_us", float("nan")), ("min_us", True),
+            ("empty_timer_pair_p95_us", 0.1),
+        ):
+            with self.subTest(field=field):
+                broken = deepcopy(baseline)
+                broken[field] = wrong
+                with self.assertRaisesRegex(ValueError, "request-level latency"):
+                    runner.summarize_request_latency([
+                        {"request_latency": baseline}, {"request_latency": broken}
+                    ], 4)
+        with self.assertRaisesRegex(ValueError, "request-level latency"):
+            runner.summarize_request_latency([
+                {"request_latency": baseline}, {}
+            ], 4)
+
+    def test_request_latency_cross_build_missing_data_rejected(self):
+        upstream, fork = make_run(), make_run()
+        upstream["request_latency"] = {
+            "schema": "meblock-request-latency-v2", "clock_step_us": 0.5,
+            "sample_count": 9, "passes": 3, "zero_sample_count": 0,
+            "min_us": 1, "median_us": 1, "p95_us": 3,
+            "p99_us": 4, "max_us": 4,
+            "empty_timer_pair_median_us": 0.1,
+            "empty_timer_pair_p95_us": 0.2,
+        }
+        with self.assertRaisesRegex(ValueError, "missing from one build"):
+            runner.compare({"upstream": [upstream], "meblock": [fork]}, DATASET)
+        fork["request_latency"] = deepcopy(upstream["request_latency"])
+        result = runner.compare(
+            {"upstream": [upstream], "meblock": [fork]}, DATASET,
+            identical_build=True,
+        )
+        self.assertEqual(result["request_latency"]["upstream"]["median_run_p95_us"], 3)
+
+    def test_pinned_live_selection_rejects_changes(self):
+        good = {"selected_filter_lists": ["easylist", "ublock-filters"]}
+        selection = {
+            "selected_list_keys_sha256": runner.hash_bytes(
+                b"easylist\nublock-filters"
+            )
+        }
+        data = {role: [deepcopy(good)] for role in runner.ROLES}
+        runner.verify_pinned_selection(data, selection)
+        data["meblock"][0]["selected_filter_lists"] = ["different"]
+        with self.assertRaisesRegex(ValueError, "selection differs"):
+            runner.verify_pinned_selection(data, selection)
+        data["meblock"][0]["selected_filter_lists"] = [1, "easylist"]
+        with self.assertRaisesRegex(ValueError, "selection differs"):
+            runner.verify_pinned_selection(data, selection)
+
     def test_rule_derived_manifest_checks_integrity_and_only_returns_safe_fields(self):
         with tempfile.TemporaryDirectory() as directory:
             dataset = Path(directory) / "rule-requests.json"
@@ -343,15 +422,22 @@ class CompareTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "compiled network filter counts"):
             runner.compare({"upstream": [upstream], "meblock": [meblock]}, DATASET)
 
-    def test_buffer_counter_drift_and_untrusted_fields_rejected(self):
+    def test_buffer_counter_drift_is_reported_without_claiming_byte_delta(self):
         one, two = make_run(), make_run()
         one["engine_buffer_footprint"] = buffer_sample()
         two["engine_buffer_footprint"] = buffer_sample(2048)
-        with self.assertRaisesRegex(ValueError, "drifted"):
-            runner.compare({
-                "upstream": [one, two],
-                "meblock": [one, two],
-            }, DATASET)
+        result = runner.compare({
+            "upstream": [one, two],
+            "meblock": [one, two],
+        }, DATASET, identical_build=True)
+        observed = result["engine_buffer_footprint"]
+        self.assertFalse(observed["stable_enough_for_byte_delta"])
+        self.assertIsNone(observed["known_allocated_delta_bytes"])
+        self.assertEqual(
+            observed["upstream"]["observed_known_allocated_range_bytes"],
+            [2176, 3200],
+        )
+        self.assertIn("CONTROL:", result["verdict"])
         malicious = buffer_sample()
         malicious["user_profile_path"] = "private-diagnostic-string"
         with self.assertRaisesRegex(ValueError, "invalid test-only"):

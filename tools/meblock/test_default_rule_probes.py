@@ -54,6 +54,17 @@ class DefaultRuleProbeTests(unittest.TestCase):
         self.assertEqual(coverage["bundled_asset_count"], 2)
         self.assertEqual(coverage["noncomment_filter_lines"], 7)
         self.assertEqual(coverage["unsupported_or_duplicate_lines"], 4)
+        self.assertEqual(coverage["syntax_input_line_counts"], {
+            "network_pattern_or_modifier": 5,
+            "network_exception_or_modifier": 1,
+            "cosmetic_or_html": 1,
+            "scriptlet": 0,
+            "other_syntax": 0,
+        })
+        self.assertEqual(
+            probes.classify_filter_text_line("example.org##+js(set,abc,true)"),
+            "scriptlet",
+        )
         self.assertEqual(rows[:4], [
             {"frameUrl": "https://reader.example.invalid/page",
              "url": "https://beta.example/probe.png", "cpt": "image"},
@@ -103,6 +114,52 @@ class DefaultRuleProbeTests(unittest.TestCase):
                          ("||alpha.example^", "alpha.example", None))
         self.assertEqual(probes.recognized_rule("@@||beta.example^$image"),
                          ("@@||beta.example^$image", "beta.example", "image"))
+
+    def test_live_enabled_list_mapping_excludes_unselected_bundled_assets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.xpi"
+            with ZipFile(source, "w") as output:
+                output.writestr(
+                    "assets/assets.dev.json",
+                    json.dumps({
+                        "chosen": {"contentURL": [
+                            "https://public.example.invalid/list.txt",
+                            "assets/ublock/filters.min.txt",
+                        ]},
+                        "disabled": {"contentURL": [
+                            "assets/thirdparties/easylist/easylist.txt",
+                        ]},
+                        "remote": {"contentURL": [
+                            "https://remote.example.invalid/remote.txt",
+                        ]},
+                    }),
+                )
+                output.writestr(
+                    "assets/ublock/filters.min.txt",
+                    "||selected.example^\n",
+                )
+                output.writestr(
+                    "assets/thirdparties/easylist/easylist.txt",
+                    "||unselected.example^\n",
+                )
+            with ZipFile(source) as handle:
+                rows, coverage = probes.build_probes(
+                    handle, shard_index=0, shard_count=1,
+                    selected_keys=["chosen", "remote"],
+                )
+                self.assertEqual(coverage["simple_host_rule_unique"], 1)
+                self.assertEqual(coverage["selected_list_count"], 2)
+                self.assertEqual(coverage["selected_without_bundled_asset_count"], 1)
+                self.assertEqual(
+                    coverage["selected_list_keys_sha256"],
+                    hashlib.sha256(b"chosen\nremote").hexdigest(),
+                )
+                self.assertTrue(all("unselected" not in r["url"] for r in rows))
+                with self.assertRaisesRegex(ValueError, "No selected"):
+                    probes.build_probes(
+                        handle, shard_index=0, shard_count=1,
+                        selected_keys=["remote"],
+                    )
 
     def test_bundled_source_digest_matches_unmodified_built_asset_directory(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -31,6 +31,9 @@ async function ready() {
         if (Date.now() > end) { throw new Error('Filtering engine did not become ready'); }
         await new Promise(resolve => setTimeout(resolve, 100));
     }
+    // Probe starts after filter compilation, not immediately as
+    // readyToFilter flips. This does not guarantee cross-profile parity.
+    await new Promise(resolve => setTimeout(resolve, 3000));
 }
 
 function prepareContext(fctxt, request) {
@@ -88,6 +91,47 @@ async function main() {
         if (checksum < 0) { throw new Error('Invalid filtering checksum'); }
     }
 
+    // Diagnostic per-request wall time, separate from the aggregate speed
+    // benchmark. Timer reads are included and may dominate tiny lookups.
+    const requestLatency = [];
+    const requestLatencyPasses = 3;
+    const clockReadSamples = [];
+    for (let index = 0; index < 2048; index++) {
+        const begin = performance.now();
+        clockReadSamples.push((performance.now() - begin) * 1000);
+    }
+    for (let pass = 0; pass < requestLatencyPasses; pass++) {
+        for (const row of data) {
+            prepareContext(fctxt, row); // Context construction is not timed.
+            sfne.redirectURL = undefined;
+            const start = performance.now();
+            sfne.matchRequest(fctxt);
+            const us = (performance.now() - start) * 1000;
+            if (!Number.isFinite(us) || us < 0) {
+                throw new Error('Invalid matcher wall-time sample');
+            }
+            requestLatency.push(us);
+        }
+    }
+    requestLatency.sort((a, b) => a - b);
+    clockReadSamples.sort((a, b) => a - b);
+    const nearestRank = (values, fraction) =>
+        values[Math.ceil(values.length * fraction) - 1];
+    const latency = {
+        schema: 'meblock-request-latency-v2',
+        clock_step_us: clockReadSamples.find(value => value > 0) || 0,
+        sample_count: requestLatency.length,
+        passes: requestLatencyPasses,
+        zero_sample_count: requestLatency.filter(value => value === 0).length,
+        min_us: requestLatency[0],
+        median_us: nearestRank(requestLatency, 0.5),
+        p95_us: nearestRank(requestLatency, 0.95),
+        p99_us: nearestRank(requestLatency, 0.99),
+        max_us: requestLatency[requestLatency.length - 1],
+        empty_timer_pair_median_us: nearestRank(clockReadSamples, 0.5),
+        empty_timer_pair_p95_us: nearestRank(clockReadSamples, 0.95),
+    };
+
     const outcomes = [];
     const modifierMasks = [];
     let blocked = 0;
@@ -128,6 +172,7 @@ async function main() {
         engine_match_ms: elapsed,
         us_per_request: elapsed * 1000 / (data.length * timedPasses),
         engine_buffer_footprint: engineBuffers,
+        request_latency: latency,
         outcomes,
         modifier_masks: modifierMasks,
         decisions: { blocked, allowed, passed: data.length - blocked - allowed },

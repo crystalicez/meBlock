@@ -25,12 +25,12 @@ No performance change is justified solely by that estimate.
 | Paired memory uncertainty and null controls | Verified in local tests and a real short Firefox null control | Reports paired delta range, median absolute deviation, deterministic bootstrap interval and exact two-sided sign-test p-value. Three pairs alone cannot justify a directional claim. Identical-XPI build mode is explicitly flagged as a negative control, even if the apparent difference is large. A directional process-wide signal requires at least six independent 300-second pairs and additional checks; it is never per-addon attribution |
 | Stock/default-lists RAM baseline | Verified short control and one 300-second same-XPI negative-control pair; repeat pairs pending | `memory_experiment.py --default-lists` pins the observed default compiled network count from the first clean Firefox profile and rejects count drift, with no synthetic rule addition. It checks bundled asset and selected list fingerprints, cosmetic counts and identical Firefox version across A/B. Pinned automatic list updates are disabled only in isolated profiles |
 | Reproducible steady-state A/B memory | **Not yet** | An exploratory online 5-minute pair showed 57.621 vs 72.851 MiB for the whole Extensions process, but filter readiness and stable counts were not validated then. Later strict tests detected filter-list changes during capture, including a 600,000-to-600,122 network-count drift after five minutes **despite offline mode**. The capture tool now additionally persists `autoUpdate=false` in each disposable profile and fails closed when rules change; it requires independently matched 5-minute AB/BA pairs before any RAM claim |
-| Default-list-derived network request coverage | Verified one reproducible shard in real Firefox; not exhaustive | A deterministic generator scans 8 public filter assets packaged in the default XPI and finds 93,326 distinct simple hostname-anchored candidates from 183,071 noncomment lines; candidates may be disabled, duplicated, or shadowed. A shard of 365 unique candidates created 1,460 first-/third-party positive and near-miss requests. Two alternating A/B pairs (4 Firefox profiles) passed per-request decisions and all modifier masks, with zero injected filters. 255 shards and non-simple filter types remain untested |
+| Default-list-derived network request coverage | Verified a selected-list-pinned shard in real Firefox; not exhaustive | The live disposable Firefox default profile selected ten lists; **eight map to public files bundled in the XPI** and two do not. The generator now pins the live selected-key SHA-256 and creates 1,460 first-/third-party positive and near-miss requests from 365 simple hostname-anchored candidates in shard 0/256. Of 197,055 syntax-classified lines in the eight selected public files, 93,326 distinct simple host rules are eligible for this generator, not individually proven. The remaining 255 shards and other rule types require further checks |
 | Individual default-list rule behavior | **Not exhaustively verified** | The running browser reports compiled totals and selected-list fingerprints, but neither proves that each default-list rule has correct behavior in every URL, request-type, frame, priority, exception or modifier context. Full exhaustive context combinations are not feasible; use per-rule differential cases and targeted rule-interaction regressions for the code being optimized |
 | Per-rule cosmetic/scriptlet browser behavior | Verified in disposable Firefox; still synthetic | Fixture v5 checks fixed-index boolean vectors for 96 cosmetic targets, all 96 corresponding near-miss nodes, 32 independent visible controls, each of 12 scriptlet targets and each of 12 untouched scriptlet near misses. Missing nodes and changed positions fail even if aggregate counts remain the same. A no-addon control checks inverse blocking outcomes; 2 alternating A/B pairs with byte-identical builds passed in Firefox |
 | Extra 600k synthetic rules | No longer required for baseline | The prior hostname-heavy and mixed-network synthetic experiments remain opt-in stress-test tools only; they are **not** part of current default-list RAM or performance acceptance. No private subscriptions are copied |
 | Controlled page navigation p95 | Verified on a local synthetic fixture; not representative | Browser-side `PerformanceNavigationTiming` measures 20 fixture page navigations after two warm-ups per isolated profile and checks behavior on every visit. A four-profile same-build control passed, with observed per-run p95 from 61 to 81 ms, a noise signal and **not** a speedup. No public website or full browsing distribution |
-| Request latency confidence | **Not yet** | Matcher benchmark reports session means and paired uncertainty; loopback page p95 exists but no representative **request-level p95** or rigorous production-like page-load performance. Claiming "no slowdown" requires this |
+| Request latency confidence | Test-only instrumented matcher tail latency under calibration; not yet accepted | Test probes sample `matchRequest` individually over three passes, separately from page-navigation p95, and record clock quantization/overhead. Disposable Firefox profiles alone disable timer precision reduction. Earlier unmodified timer rounded most sub-ms requests to zero; no production website request p95 or reliable per-addon CPU result yet. A timer-quality gate withholds unresolved p95 rather than claiming accuracy |
 | WASM vs JS/native retained allocations | **Not yet** | Process `explicit` aggregates unrelated runtime allocations. Without validated heap/WASM attribution it is unsafe to decide which representation to optimize |
 | CI and public privacy | Verified for unit tests and local guard | The Windows regression workflow runs **only on manual dispatch**, not push or pull requests. It checks unit tests, Node syntax and privacy guard. Raw `about:memory` and regression JSON artifacts are never uploaded. Force-adding any file under `dist/build/` is rejected by the guard. The **optional** full Firefox integration job has not been proven on GitHub's hosted runner |
 
@@ -58,6 +58,31 @@ not exhaustive proof of correctness for a proposed optimization.
 
 ## Actual Firefox validation, 2026-10-19
 
+- Updated selected-list-pinned network baseline, using a real disposable
+  Firefox selected-list snapshot, completed a **strict one-pair / two
+  Firefox-profile** control with 1,460 requests per profile and **zero
+  injected filter rules**. Decisions, modifiers, synthetic page checks
+  and selected-list identity all matched. The selected four engine buffers
+  remained stable at **17.5 MiB** in each profile; they are not complete
+  addon RAM. The new independently sampled request-matcher p95 diagnostics
+  were **withheld**: observed Firefox timer granularity was about **20 µs**
+  and ~47% of individual timings rounded to zero, making a useful
+  microsecond p95 unavailable. The same-build verdict remained CONTROL
+  (byte-identical code, no speedup).
+- Previous four-profile run exposed **real buffer capacity drift** across
+  profiles with equal network-filter counts. The buffer comparator now
+  reports observed ranges and suppresses a single byte-delta conclusion
+  rather than quietly inferring allocation improvements. A longer
+  test-only engine readiness delay restored stable known-buffer readings
+  in a subsequent four-profile control. Neither result attributes the
+  full Extensions-process footprint to a single addon.
+- Syntax-only classification of selected bundled public lists found
+  **197,055 non-comment lines**: 144,667 network patterns/modifiers,
+  4,840 network exceptions/modifiers, 33,028 cosmetic/HTML,
+  10,390 scriptlets and 4,130 other syntaxes. These are *source line
+  categories*, not compiled rule counts, coverage or proof of
+  individual rule behavior. Two active lists had no mapped bundled
+  public text and remain outside this classification.
 - An actual default-XPI bundled-rule probe on Firefox generated **1,460
   requests** from 365 distinct simple host-anchored public filter
   candidates in shard 0/256. Across **two A/B pairs in four Firefox
