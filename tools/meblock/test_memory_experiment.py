@@ -1,8 +1,14 @@
 """Paired memory comparison must reject mismatched inputs and report exact deltas."""
 
+from contextlib import redirect_stdout
+from io import StringIO
+import json
+from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
-from memory_experiment import schedule, summarize_pairs
+from memory_experiment import main, schedule, summarize_pairs
 
 
 def sample(condition, mib, *, selection="stable", source="sha-stock", version="157.0"):
@@ -146,6 +152,30 @@ class PairedMemoryTests(unittest.TestCase):
                 (1, "stock", sample("stock", 60, source="upstream-hash")),
                 (1, "synthetic", sample("synthetic", 57, source="candidate-two")),
             ], mode="build")
+
+    def test_mixed_cli_summary_labels_network_rule_shape_truthfully(self):
+        def fake_capture(*_args, **kwargs):
+            reading = 60 if kwargs["extra_rules"] == 0 else 65
+            return sample("synthetic", reading)
+
+        with tempfile.TemporaryDirectory() as directory:
+            with (patch("memory_experiment.PRIVATE_DIR", Path(directory)),
+                  patch("memory_experiment.capture", side_effect=fake_capture),
+                  redirect_stdout(StringIO())):
+                outcome = main([
+                    "--pairs", "1", "--settle-seconds", "2",
+                    "--base-network-filters", "5",
+                    "--extra-synthetic-rules", "2",
+                    "--synthetic-rule-mix", "mixed-network",
+                ])
+            self.assertEqual(outcome, 0)
+            report = json.loads(next(Path(directory).glob("paired-memory-*.json")).read_text())
+        self.assertEqual(report["synthetic_rule_mix"], "mixed-network")
+        self.assertEqual(report["extra_synthetic_rules"], 2)
+        self.assertNotIn("extra_synthetic_hostnames", report)
+        self.assertEqual(report["conditions"],
+                         "same XPI with and without additional synthetic mixed network rules")
+        self.assertIn("EXPLORATORY", report["verdict"])
 
     def test_unknown_comparison_mode_refused(self):
         with self.assertRaisesRegex(ValueError, "Unknown"):

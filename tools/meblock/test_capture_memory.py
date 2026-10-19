@@ -42,6 +42,33 @@ class CaptureMemoryTests(unittest.TestCase):
                 )
                 self.assertEqual(archive.read("manifest.json"), b'{"version":"1"}')
 
+    def test_mixed_network_fixture_uses_diverse_valid_rule_shapes(self):
+        with tempfile.TemporaryDirectory() as root:
+            original = Path(root) / "original.xpi"
+            first = Path(root) / "first.xpi"
+            second = Path(root) / "second.xpi"
+            with ZipFile(original, "w") as archive:
+                archive.writestr(BUILT_IN_LIST, "||fixed.example.invalid^\n")
+                archive.writestr("manifest.json", '{"version":"1"}')
+            synthetic_xpi(original, first, 100, rule_mix="mixed-network")
+            synthetic_xpi(original, second, 100, rule_mix="mixed-network")
+            self.assertEqual(first.read_bytes(), second.read_bytes())
+            with ZipFile(first) as archive:
+                lines = archive.read(BUILT_IN_LIST).decode("ascii").splitlines()[2:]
+            self.assertEqual(len(lines), 100)
+            self.assertEqual(len(set(lines)), 100)
+            self.assertEqual(lines[0], "||mb-memory-0000000.example.invalid^")
+            self.assertEqual(lines[55], "||mb-memory-0000055.example.invalid/asset.js")
+            self.assertEqual(lines[75], "||mb-memory-0000075.example.invalid^$script")
+            self.assertEqual(lines[90], "||mb-memory-0000090.example.invalid^$image,third-party")
+            self.assertEqual(lines[99], "/mb-memory-0000099[.]example[.]invalid/")
+            self.assertTrue(all("example.invalid" in line or "[.]example[.]invalid" in line
+                                for line in lines))
+
+    def test_unknown_fixture_mix_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "rule mix"):
+            synthetic_xpi(Path("unused"), Path("unused-target"), 3, rule_mix="unknown")
+
     def test_public_filter_asset_fingerprint_is_content_based(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

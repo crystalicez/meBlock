@@ -70,11 +70,28 @@ hostname-heavy dataset, **not the user's real 600k filter mix**.
 python tools/meblock/capture_memory.py --offline --settle-seconds 300 --extra-synthetic-hostnames 347757 --expected-network-filters 600000
 ```
 
+For a second, deterministic **mixed network-rule** workload, use
+`--synthetic-rule-mix mixed-network`. Each 100 injected rules contain 55
+hostname blocks, 20 path-specific blocks, 15 script-specific blocks, nine
+image/third-party blocks and one regex. All fixture hosts use the reserved
+`.invalid` test domain. The default remains `hostname` to preserve older
+baseline comparisons. This mix measures more network matcher shapes, but
+still does not reproduce the user's subscriptions, cosmetic rule composition,
+scriptlets, or live webpage activity.
+
+```powershell
+python tools/meblock/capture_memory.py --offline --settle-seconds 2 --extra-synthetic-rules 347757 --synthetic-rule-mix mixed-network --expected-network-filters 600000
+```
+
 For strictly paired, alternating AB/BA experiments, run:
 
 ```powershell
 python tools/meblock/memory_experiment.py --pairs 3 --settle-seconds 300 --base-network-filters 252243 --extra-synthetic-hostnames 347757
 ```
+
+Add `--synthetic-rule-mix mixed-network` to the paired runner when the
+mixed fixture is the intended workload. Do not compare its totals directly
+with hostname-only results as though they used identical filter inputs.
 
 The paired runner compares the original test XPI and the same XPI with
 the synthetic additions, using a **new Firefox profile for each condition**.

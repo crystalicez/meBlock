@@ -202,10 +202,31 @@ const done = arguments[arguments.length - 1];
     browser.get("about:blank")
 
 
-def synthetic_xpi(source, target, count):
+RULE_MIXES = ("hostname", "mixed-network")
+
+
+def synthetic_rule(index, rule_mix):
+    host = f"mb-memory-{index:07d}.example.invalid"
+    if rule_mix == "hostname":
+        return f"||{host}^\n"
+    bucket = index % 100
+    if bucket < 55:
+        return f"||{host}^\n"
+    if bucket < 75:
+        return f"||{host}/asset.js\n"
+    if bucket < 90:
+        return f"||{host}^$script\n"
+    if bucket < 99:
+        return f"||{host}^$image,third-party\n"
+    return f"/mb-memory-{index:07d}[.]example[.]invalid/\n"
+
+
+def synthetic_xpi(source, target, count, rule_mix="hostname"):
     """Add public deterministic rules only to a disposable test XPI."""
     if count < 1:
-        raise ValueError("Synthetic hostname-rule count must be positive")
+        raise ValueError("Synthetic network-rule count must be positive")
+    if rule_mix not in RULE_MIXES:
+        raise ValueError("Unknown synthetic rule mix")
     with ZipFile(source) as original, ZipFile(
         target, "w", compression=ZIP_DEFLATED, compresslevel=6
     ) as clone:
@@ -216,8 +237,7 @@ def synthetic_xpi(source, target, count):
             data = original.read(name)
             if name == BUILT_IN_LIST:
                 additions = "".join(
-                    f"||mb-memory-{i:07d}.example.invalid^\n"
-                    for i in range(count)
+                    synthetic_rule(i, rule_mix) for i in range(count)
                 ).encode("ascii")
                 data = data + b"\n" + additions
             clone.writestr(original.getinfo(name), data)
@@ -265,7 +285,8 @@ def extension_process_explicit_mib(reports):
 
 
 def capture(addon, firefox, settle_seconds, extra_rules=0, samples=1,
-            expected_network_filters=None, sample_spacing=60, offline=False):
+            expected_network_filters=None, sample_spacing=60, offline=False,
+            rule_mix="hostname"):
     PRIVATE_DIR.mkdir(parents=True, exist_ok=True)
     if not addon.is_file():
         raise FileNotFoundError("Test-only addon XPI not found")
@@ -273,7 +294,7 @@ def capture(addon, firefox, settle_seconds, extra_rules=0, samples=1,
     public_assets_sha256 = source_filter_assets_sha256(addon)
     if extra_rules:
         disposable = PRIVATE_DIR / "synthetic-meblock.xpi"
-        synthetic_xpi(addon, disposable, extra_rules)
+        synthetic_xpi(addon, disposable, extra_rules, rule_mix=rule_mix)
         addon = disposable
 
     test_sha256 = hashlib.sha256(addon.read_bytes()).hexdigest()
@@ -373,6 +394,7 @@ def capture(addon, firefox, settle_seconds, extra_rules=0, samples=1,
             "isolated_profile": True,
             "anonymized": True,
             "synthetic_extra_rules": extra_rules,
+            "synthetic_rule_mix": rule_mix if extra_rules else "none",
             "browser_offline_for_pinned_baseline": offline,
             "source_package_sha256": source_sha256,
             "source_filter_assets_sha256": public_assets_sha256,
@@ -392,6 +414,7 @@ def capture(addon, firefox, settle_seconds, extra_rules=0, samples=1,
             "source_filter_assets_sha256": public_assets_sha256,
             "test_package_sha256": test_sha256,
             "settle_seconds_after_filter_readiness": settle_seconds,
+            "synthetic_rule_mix": rule_mix if extra_rules else "none",
         }
     finally:
         browser.quit()
@@ -407,7 +430,9 @@ def main(argv=None):
         default=Path(r"C:\Program Files\Mozilla Firefox\firefox.exe")
     )
     parser.add_argument("--settle-seconds", type=float, default=300)
-    parser.add_argument("--extra-synthetic-hostnames", type=int, default=0)
+    parser.add_argument("--extra-synthetic-hostnames", "--extra-synthetic-rules",
+                        dest="extra_synthetic_hostnames", type=int, default=0)
+    parser.add_argument("--synthetic-rule-mix", choices=RULE_MIXES, default="hostname")
     parser.add_argument("--samples", type=int, default=1)
     parser.add_argument("--runs", type=int, default=1, help="Independent fresh Firefox profiles")
     parser.add_argument("--sample-spacing", type=float, default=60)
@@ -426,6 +451,7 @@ def main(argv=None):
                 args.settle_seconds, args.extra_synthetic_hostnames, args.samples,
                 args.expected_network_filters, args.sample_spacing,
                 args.offline,
+                args.synthetic_rule_mix,
             )
     except (OSError, RuntimeError, ValueError) as exc:
         parser.exit(1, f"Firefox memory capture failed: {exc}\n")

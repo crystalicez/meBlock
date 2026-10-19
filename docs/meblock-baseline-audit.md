@@ -19,7 +19,7 @@ measurement**. No performance change is justified solely by that estimate.
 | The extra 600,000 test rules really compile | Verified for the current synthetic fixture | Stock XPI: 252,243 network rules; same XPI plus 600,000 unique hostname rules: **852,243**; 44,192 cosmetic rules and ten selected filter lists in both. Counts were read directly from the running extension, not inferred from ZIP contents |
 | Memory process measurement | Verified, but **process-wide** | `analyze_memory.py` validates unit=bytes, reads raw Firefox JSON.gz, sums leaf reporters without parent+child duplication and rejects incomplete scopes. Extensions-process `explicit` is **not** the extension's private retained memory |
 | Reproducible steady-state A/B memory | **Not yet** | An exploratory online 5-minute pair showed 57.621 vs 72.851 MiB for the whole Extensions process, but filter readiness and stable counts were not validated then. Later strict tests detected filter-list changes during capture, including a 600,000-to-600,122 network-count drift after five minutes **despite offline mode**. The capture tool now additionally persists `autoUpdate=false` in each disposable profile and fails closed when rules change; it requires independently matched 5-minute AB/BA pairs before any RAM claim |
-| 600k production-like filter composition | **Not yet** | The 600,000 injected rules are *hostname-only* plus preloaded public lists. User subscriptions may include many regex, cosmetic, scriptlet and modifier rules and must not be copied from a personal profile |
+| 600k production-like filter composition | **Partially exercised, not representative** | The original 600k fixture uses hostname rules. The optional deterministic `mixed-network` fixture adds hostname, path, script, image/third-party and regex filters to test different network parser shapes. It does **not** represent the actual user's cosmetic, scriptlet or network-rule proportions; no personal subscriptions are copied |
 | Request latency confidence | **Not yet** | Existing benchmarking reports per-session means and paired uncertainty; no representative **request-level p95** or rigorous end-to-end page-load performance. Claiming "no slowdown" requires this |
 | WASM vs JS/native retained allocations | **Not yet** | Process `explicit` aggregates unrelated runtime allocations. Without validated heap/WASM attribution it is unsafe to decide which representation to optimize |
 | CI and public privacy | Verified for unit tests and local guard | Windows CI runs regression unit tests, Node syntax and privacy guard. Raw `about:memory` and regression JSON artifacts are never uploaded. Force-adding any file under `dist/build/` is rejected by the guard. The **optional** full Firefox integration workflow has not been proven on GitHub's hosted runner |
@@ -96,6 +96,18 @@ measurement**. No performance change is justified solely by that estimate.
   compiled rule counts and Firefox version. A mismatch fails closed.
   This content fingerprint cannot verify separately downloaded or user
   subscription lists; keep the test browser offline and updates disabled.
+- A deterministic `mixed-network` fixture now exercises 55% hostname,
+  20% path-specific, 15% script-specific, 9% image/third-party and 1%
+  regex network rules in addition to the pinned stock lists. A fresh,
+  offline Firefox 157.0 smoke with 347,757 mixed additions verified
+  **600,000 compiled network filters**, **44,192 cosmetic filters**,
+  ten selected lists, disabled auto-update, and identical engine state
+  before and after capture. A separate two-profile stock-versus-mixed
+  paired runner also passed its count and source-input checks and
+  correctly returned `EXPLORATORY` for one two-second pair.
+  These observations **are not** steady-state RAM evidence. The test
+  still lacks a representative mix of cosmetic filters, scriptlets and
+  real page traffic.
 - All raw reports and disposable synthetic XPI packages remain beneath
   Git-ignored `dist/build/private-memory/`. No raw reporting paths or
   browser URLs are included in this public audit.
@@ -115,6 +127,9 @@ python tools/meblock/capture_memory.py --offline --settle-seconds 2 --expected-n
 # Synthetic test with exactly 600k compiled network rules in total:
 # 252243 pinned stock rules + 347757 synthetic hostname rules
 python tools/meblock/capture_memory.py --offline --settle-seconds 2 --extra-synthetic-hostnames 347757 --expected-network-filters 600000
+
+# Mixed network filter shapes, still synthetic and not a production mix
+python tools/meblock/capture_memory.py --offline --settle-seconds 2 --extra-synthetic-rules 347757 --synthetic-rule-mix mixed-network --expected-network-filters 600000
 
 # Repeatable, independent 5-minute experiments (start timer after readiness)
 python tools/meblock/capture_memory.py --offline --settle-seconds 300 --runs 3 --expected-network-filters 252243

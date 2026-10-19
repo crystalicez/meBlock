@@ -8,7 +8,7 @@ import math
 from pathlib import Path
 import statistics
 
-from capture_memory import PRIVATE_DIR, ROOT, SAFE_PROCESS_CATEGORIES, capture
+from capture_memory import PRIVATE_DIR, ROOT, RULE_MIXES, SAFE_PROCESS_CATEGORIES, capture
 
 
 def schedule(pairs):
@@ -145,7 +145,10 @@ def main(argv=None):
     parser.add_argument("--pairs", type=int, default=3)
     parser.add_argument("--settle-seconds", type=float, default=300)
     parser.add_argument("--base-network-filters", type=int, required=True)
-    parser.add_argument("--extra-synthetic-hostnames", type=int, default=0)
+    parser.add_argument("--extra-synthetic-hostnames", "--extra-synthetic-rules",
+                        dest="extra_synthetic_hostnames", type=int, default=0)
+    parser.add_argument("--synthetic-rule-mix", choices=RULE_MIXES,
+                        default="hostname")
     args = parser.parse_args(argv)
     if (args.pairs < 1 or args.settle_seconds < 0 or
         args.base_network_filters < 1 or args.extra_synthetic_hostnames < 0 or
@@ -168,12 +171,15 @@ def main(argv=None):
             data = capture(
                 addon, args.firefox, args.settle_seconds,
                 extra_rules=extra, samples=1, expected_network_filters=expected,
-                offline=True,
+                offline=True, rule_mix=args.synthetic_rule_mix,
             )
             rows.append((pair, condition, data))
         summary = summarize_pairs(rows, mode=mode)
         summary["base_network_filters"] = args.base_network_filters
-        summary["extra_synthetic_hostnames"] = args.extra_synthetic_hostnames
+        summary["extra_synthetic_rules"] = args.extra_synthetic_hostnames
+        if args.synthetic_rule_mix == "hostname":
+            summary["extra_synthetic_hostnames"] = args.extra_synthetic_hostnames
+        summary["synthetic_rule_mix"] = args.synthetic_rule_mix
         summary["source_package_sha256"] = rows[0][2]["source_package_sha256"]
         summary["source_filter_assets_sha256"] = rows[0][2]["source_filter_assets_sha256"]
         if mode == "build":
@@ -184,7 +190,9 @@ def main(argv=None):
         summary["conditions"] = (
             "baseline XPI vs candidate XPI; both use equal pinned filter counts"
             if mode == "build" else
-            "same XPI with and without additional synthetic hostname rules"
+            "same XPI with and without additional synthetic "
+            + ("hostname" if args.synthetic_rule_mix == "hostname"
+               else "mixed network") + " rules"
         )
         summary["measurement"] = "whole Firefox Extensions process explicit, not addon-private RAM"
         summary["raw_reports"] = "retained only in ignored dist/build/private-memory"
