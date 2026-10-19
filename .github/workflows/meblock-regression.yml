@@ -7,11 +7,15 @@ on:
       - ".github/workflows/meblock-regression.yml"
       - "tools/meblock/**"
       - "docs/meblock-comparison.md"
+      - "docs/meblock-memory.md"
+      - "docs/meblock-baseline-audit.md"
   pull_request:
     paths:
       - ".github/workflows/meblock-regression.yml"
       - "tools/meblock/**"
       - "docs/meblock-comparison.md"
+      - "docs/meblock-memory.md"
+      - "docs/meblock-baseline-audit.md"
   workflow_dispatch:
     inputs:
       firefox_integration:

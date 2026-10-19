@@ -33,25 +33,56 @@ The analyzer below processes files locally and does not upload them.
 
 ## Capture a report without using your personal Firefox profile
 
-The optional local capture tool uses Selenium to launch a **new temporary
-Firefox profile**, installs only the specified test XPI, and invokes Mozilla's
-built-in memory reporter with **anonymization on** and **GC/minimization off**.
-It never reads the regular Firefox profile. The output is written only under
-ignored `dist/build/private-memory/` and must never be uploaded, committed
-or attached to a public issue.
+The local capture tool launches a **fresh disposable Firefox profile**,
+installs only the specified test XPI, waits for uBO's actual live
+`netFilterCount`, `cosmeticFilterCount`, at least one enabled list, and
+`isUpdating=false`. It requires several stable observations before starting
+the timer, waits **300 seconds after readiness**, and checks the live
+filter counts again after the memory dump. If the engine changes, the
+baseline fails rather than silently accepting a mismatched run.
+
+The tool uses Mozilla's memory dumper with **anonymization on** and
+**GC/minimization off**. Raw memory reports are saved only under ignored
+`dist/build/private-memory/`; never upload, commit or attach them to a
+public GitHub issue.
+
+**Pinned-list mode** runs this *test profile only* with external networking
+disabled **before installing the XPI**, then persists `autoUpdate=false`
+through uBO's own dashboard API. This setting change is confined to the
+temporary Firefox profile; it is checked again before and after capture,
+without modifying the XPI or the user's Firefox profile. Use this mode
+for public bundled-list experiments, not to represent all normal online
+browsing. The `--expected-network-filters` value is
+specific to the **tested package**, not a permanent universal constant.
 
 ```powershell
-python tools/meblock/capture_memory.py --settle-seconds 300
+python tools/meblock/capture_memory.py --offline --settle-seconds 300 --runs 3 --expected-network-filters 252243
 ```
 
-To exercise a separate **synthetic**, roughly 600,000-rule workload, append
-600,000 deterministic public hostname rules to a throwaway copy of the built
-XPI. This is *additional* to the filter lists already enabled in the package;
-it does **not** reproduce anyone's own set of 600k subscriptions.
+To exercise **600,000 network filters in total**, take the verified
+stock engine count (252,243 for this pinned package) and inject
+**347,757 additional deterministic hostname rules** into a disposable
+test XPI. The engine must report exactly 600,000 compiled network
+filters before and after measurement. This is still a synthetic,
+hostname-heavy dataset, **not the user's real 600k filter mix**.
 
 ```powershell
-python tools/meblock/capture_memory.py --settle-seconds 300 --extra-synthetic-hostnames 600000
+python tools/meblock/capture_memory.py --offline --settle-seconds 300 --extra-synthetic-hostnames 347757 --expected-network-filters 600000
 ```
+
+For strictly paired, alternating AB/BA experiments, run:
+
+```powershell
+python tools/meblock/memory_experiment.py --pairs 3 --settle-seconds 300 --base-network-filters 252243 --extra-synthetic-hostnames 347757
+```
+
+The paired runner compares the original test XPI and the same XPI with
+the synthetic additions, using a **new Firefox profile for each condition**.
+It rejects changes in the source XPI hash, Firefox version, enabled list
+fingerprint or cosmetic filter count. It saves a sanitized summary locally
+and never uploads raw reports. Even with three valid pairs, the verdict
+is **process-wide measurement only**, not proof of extension-private
+memory savings or of preserved lookup latency.
 
 Firefox system-level scripting is enabled **only** in this isolated test
 session via geckodriver's `--allow-system-access` flag so the tool can ask

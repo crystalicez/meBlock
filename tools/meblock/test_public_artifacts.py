@@ -17,6 +17,8 @@ class PublicArtifactGuardTests(unittest.TestCase):
             "results/archive.heapsnapshot",
             "tmp/memory.json.gz",
             "settings.sqlite",
+            "dist/build/private-memory/synthetic-meblock.xpi",
+            "dist/build/meblock-comparison/session/report.json",
             "sample.cpuprofile",
         )
         for path in bad:

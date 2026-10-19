@@ -6,7 +6,7 @@ import re
 import subprocess
 
 BLOCKED_NAME = re.compile(
-    r"(?i)(?:^|/)(?:HANDOFF-NEXT-SESSION\.md|memory-reports|profiles|private|\.audit)(?:/|$)"
+    r"(?i)(?:^|/)(?:HANDOFF-NEXT-SESSION\.md|memory-reports|private-memory|dist/build|profiles|private|\.audit)(?:/|$)"
 )
 BLOCKED_SUFFIX = (
     ".json.gz", ".heapsnapshot", ".cpuprofile", ".sqlite",
