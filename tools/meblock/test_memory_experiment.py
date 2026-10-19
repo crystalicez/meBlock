@@ -15,6 +15,8 @@ def sample(condition, mib, *, selection="stable", source="sha-stock", version="1
             "auto_update": False,
         },
         "source_package_sha256": source,
+        "source_filter_assets_sha256": "same-pinned-public-filter-asset-hash",
+        "settle_seconds_after_filter_readiness": 300,
         "firefox_version": version,
     }
 
@@ -50,6 +52,26 @@ class PairedMemoryTests(unittest.TestCase):
         self.assertEqual(result["median_synthetic_mib"], 63)
         self.assertEqual(result["median_paired_delta_mib"], 11)
         self.assertIn("process-wide", result["verdict"])
+
+    def test_three_pairs_without_five_minutes_remain_exploratory(self):
+        rows = []
+        for pair in range(3):
+            for name, mib in (("stock", 55), ("synthetic", 64)):
+                data = sample(name, mib)
+                data["settle_seconds_after_filter_readiness"] = 30
+                rows.append((pair, name, data))
+        result = summarize_pairs(rows)
+        self.assertEqual(result["minimum_settle_seconds"], 30)
+        self.assertIn("shorter than 300 seconds", result["verdict"])
+
+    def test_missing_settling_time_refused(self):
+        stock = sample("stock", 55)
+        del stock["settle_seconds_after_filter_readiness"]
+        with self.assertRaisesRegex(ValueError, "settling duration"):
+            summarize_pairs([
+                (0, "stock", stock),
+                (0, "synthetic", sample("synthetic", 65)),
+            ])
 
     def test_missing_condition_refused(self):
         with self.assertRaisesRegex(ValueError, "Incomplete"):
@@ -97,6 +119,15 @@ class PairedMemoryTests(unittest.TestCase):
         self.assertEqual(comparison["comparison_mode"], "build")
         self.assertEqual(comparison["median_paired_delta_mib"], -3)
         self.assertIn("EXPLORATORY", comparison["verdict"])
+
+    def test_distinct_builds_must_use_same_bundled_filter_assets(self):
+        newer = sample("synthetic", 57, source="candidate-hash")
+        newer["source_filter_assets_sha256"] = "changed-content"
+        with self.assertRaisesRegex(ValueError, "Bundled filter asset"):
+            summarize_pairs([
+                (0, "stock", sample("stock", 60, source="upstream-hash")),
+                (0, "synthetic", newer),
+            ], mode="build")
 
     def test_distinct_builds_must_load_same_network_count(self):
         newer = sample("synthetic", 57, source="candidate-hash")

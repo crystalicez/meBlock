@@ -54,6 +54,9 @@ def summarize_pairs(rows, mode="rule-count"):
         if (original["filter_engine"]["selected_lists_sha256"] !=
             amended["filter_engine"]["selected_lists_sha256"]):
             raise ValueError("Selected filter-list fingerprint differs between conditions")
+        if (original["source_filter_assets_sha256"] !=
+            amended["source_filter_assets_sha256"]):
+            raise ValueError("Bundled filter asset fingerprint differs between conditions")
         if (original["filter_engine"]["cosmetic_filters"] !=
             amended["filter_engine"]["cosmetic_filters"]):
             raise ValueError("Cosmetic filtering engine differs between conditions")
@@ -84,9 +87,16 @@ def summarize_pairs(rows, mode="rule-count"):
         deltas.append(summary)
     if not deltas:
         raise ValueError("No A/B pairs found")
+    settling = []
+    for _, _, data in rows:
+        seconds = data.get("settle_seconds_after_filter_readiness")
+        if type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds < 0:
+            raise ValueError("Missing or invalid post-readiness settling duration")
+        settling.append(seconds)
     all_inputs = {
         (
             data["firefox_version"],
+            data["source_filter_assets_sha256"],
             data["filter_engine"]["selected_lists_sha256"],
             data["filter_engine"]["cosmetic_filters"],
         )
@@ -108,6 +118,7 @@ def summarize_pairs(rows, mode="rule-count"):
             "synthetic": "candidate" if mode == "build" else "synthetic-filter-volume",
         },
         "pairs": len(deltas),
+        "minimum_settle_seconds": min(settling),
         "median_stock_mib": round(statistics.median(
             row["stock_extensions_process_explicit_mib"] for row in deltas), 3),
         "median_synthetic_mib": round(statistics.median(
@@ -118,6 +129,8 @@ def summarize_pairs(rows, mode="rule-count"):
         "verdict": (
             "EXPLORATORY: fewer than three independent pairs"
             if len(deltas) < 3 else
+            "EXPLORATORY: post-readiness idle time shorter than 300 seconds"
+            if min(settling) < 300 else
             "MEASURED: process-wide difference only; no per-extension optimization claim"
         ),
     }
@@ -162,6 +175,7 @@ def main(argv=None):
         summary["base_network_filters"] = args.base_network_filters
         summary["extra_synthetic_hostnames"] = args.extra_synthetic_hostnames
         summary["source_package_sha256"] = rows[0][2]["source_package_sha256"]
+        summary["source_filter_assets_sha256"] = rows[0][2]["source_filter_assets_sha256"]
         if mode == "build":
             summary["candidate_source_package_sha256"] = next(
                 data["source_package_sha256"]

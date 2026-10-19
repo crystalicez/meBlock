@@ -73,6 +73,29 @@ measurement**. No performance change is justified solely by that estimate.
   categories such as `window-objects` and `js-non-window` without
   exposing private reporter paths. These categories cannot yet isolate
   WASM or JS allocations belonging uniquely to this extension.
+- A three-pair alternating AB/BA **smoke**, six real isolated Firefox
+  profiles with only **10 seconds of post-readiness idle**, passed for
+  252,243 versus exactly 600,000 compiled network filters. Median whole
+  Extensions-process `explicit`: **55.320 MiB** baseline versus
+  **69.297 MiB** with synthetic rules. Median **paired** increase was
+  **+13.441 MiB** (individual pair increases +14.126, +12.818,
+  +13.441 MiB). This is **NOT a steady-state memory baseline**:
+  the older script labelled three pairs as `MEASURED` without enforcing
+  sufficient idle duration. The corrected verdict requires both
+  **three independent pairs and >=300 seconds** of post-readiness idle
+  for every condition; ten-second data must remain `EXPLORATORY`.
+- A separate **10-second same-XPI-versus-itself Firefox negative control**
+  passed all build-matching requirements (identical source XPI hash,
+  public bundled filter assets, enabled-list fingerprint, compiled rule
+  counts and browser version), but the two isolated profiles still differed
+  by **+7.031 MiB (+12.464%)** of whole Extensions-process
+  `explicit` RAM. The result was correctly `EXPLORATORY`:
+  this is runtime noise, **not an optimization improvement or regression**.
+- The build-comparison runner now verifies SHA-256 of all bundled public
+  text filter assets, as well as the active filter-list fingerprint,
+  compiled rule counts and Firefox version. A mismatch fails closed.
+  This content fingerprint cannot verify separately downloaded or user
+  subscription lists; keep the test browser offline and updates disabled.
 - All raw reports and disposable synthetic XPI packages remain beneath
   Git-ignored `dist/build/private-memory/`. No raw reporting paths or
   browser URLs are included in this public audit.

@@ -82,8 +82,11 @@ the synthetic additions, using a **new Firefox profile for each condition**.
 For a **real upstream-versus-fork memory comparison**, use two separate
 uninstrumented XPIs built with the *same pinned filter assets*. This mode
 checks an equal number of compiled network and cosmetic filters, identical
-selected-list fingerprints, a stable source hash per build, and a matching
-Firefox version. Both builds receive the **same** synthetic additions
+selected-list fingerprints, **matching SHA-256 of all bundled public text filter
+assets**, a stable source hash per build, and a matching Firefox version.
+The bundled-asset hash protects against changed list content even if the
+compiled rule *count* stays the same; it does not fingerprint separately
+downloaded user subscriptions. Both builds receive the **same** synthetic additions
 when requested; a build-to-build memory test is never confused with a
 stock-versus-more-rules test.
 
@@ -95,12 +98,15 @@ These named example XPI inputs must be built locally first, and the actual
 stock network count must be verified for those packages. Do not use
 `instrumented.xpi` as a production memory baseline. The build comparison
 results are still **Extensions-process-wide**, not private extension heap
-figures.
-It rejects changes in the source XPI hash, Firefox version, enabled list
-fingerprint or cosmetic filter count. It saves a sanitized summary locally
-and never uploads raw reports. Even with three valid pairs, the verdict
-is **process-wide measurement only**, not proof of extension-private
-memory savings or of preserved lookup latency.
+figures. The runner rejects inconsistent build inputs, list fingerprints,
+bundled filter asset hashes, rule counts, Firefox versions, and enabled
+automatic list updates. It saves aggregate-only results locally and never
+uploads raw reports. Even with three valid pairs, the verdict is
+**process-wide measurement only**, not proof of extension-private
+memory savings or preserved lookup latency. A result remains
+**EXPLORATORY** until it has at least three independent A/B pairs and
+each condition was held for at least 300 seconds after filter readiness.
+Short Firefox smoke runs cannot be labeled steady-state baseline measurements.
 
 Firefox system-level scripting is enabled **only** in this isolated test
 session via geckodriver's `--allow-system-access` flag so the tool can ask

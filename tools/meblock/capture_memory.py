@@ -25,6 +25,23 @@ ROOT = Path(__file__).resolve().parents[2]
 PRIVATE_DIR = ROOT / "dist" / "build" / "private-memory"
 BUILT_IN_LIST = "assets/ublock/filters.min.txt"
 
+
+def source_filter_assets_sha256(package):
+    """Hash public bundled text assets, not host metadata or private user lists."""
+    with ZipFile(package) as archive:
+        names = sorted(
+            name for name in archive.namelist()
+            if name.startswith("assets/") and name.endswith(".txt")
+        )
+        if BUILT_IN_LIST not in names:
+            raise ValueError("Test package has no bundled default filter list")
+        digest = hashlib.sha256()
+        for name in names:
+            digest.update(name.encode("utf-8") + b"\0")
+            digest.update(hashlib.sha256(archive.read(name)).digest())
+        return digest.hexdigest()
+
+
 DUMP_SCRIPT = """
 const target = arguments[0];
 const resolve = arguments[arguments.length - 1];
@@ -157,27 +174,30 @@ def disable_test_list_updates(browser, addon_id):
 const done = arguments[arguments.length - 1];
 (async () => {
     for (let attempt = 0; attempt < 90; attempt++) {
-        if (typeof vAPI === 'object' && vAPI.messaging?.send) {
-            await vAPI.messaging.send('dashboard', {
-                what: 'userSettings', name: 'autoUpdate', value: false,
-            });
-            for (let check = 0; check < 40; check++) {
-                const saved = await browser.storage.local.get('autoUpdate');
-                if (saved.autoUpdate === false) {
-                    done('persisted');
-                    return;
-                }
-                await new Promise(resolve => setTimeout(resolve, 100));
-            }
-            done('not-persisted');
+        if (typeof vAPI !== 'object' || !vAPI.messaging?.send) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            continue;
+        }
+        const active = await vAPI.messaging.send('dashboard', { what: 'getLists' });
+        if (!Number.isInteger(active?.netFilterCount) || active.netFilterCount <= 0) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            continue;
+        }
+        await vAPI.messaging.send('dashboard', {
+            what: 'userSettings', name: 'autoUpdate', value: false,
+        });
+        const saved = await browser.storage.local.get('autoUpdate');
+        const now = await vAPI.messaging.send('dashboard', { what: 'getLists' });
+        if (saved.autoUpdate === false && now?.autoUpdate === false) {
+            done('persisted-and-active');
             return;
         }
         await new Promise(resolve => setTimeout(resolve, 500));
     }
-    done('not-ready');
+    done('not-consistent');
 })().catch(() => done('setting-error'));
 """)
-    if status != "persisted":
+    if status != "persisted-and-active":
         raise RuntimeError("Could not disable automatic updates in disposable profile")
     browser.get("about:blank")
 
@@ -250,6 +270,7 @@ def capture(addon, firefox, settle_seconds, extra_rules=0, samples=1,
     if not addon.is_file():
         raise FileNotFoundError("Test-only addon XPI not found")
     source_sha256 = hashlib.sha256(addon.read_bytes()).hexdigest()
+    public_assets_sha256 = source_filter_assets_sha256(addon)
     if extra_rules:
         disposable = PRIVATE_DIR / "synthetic-meblock.xpi"
         synthetic_xpi(addon, disposable, extra_rules)
@@ -354,6 +375,7 @@ def capture(addon, firefox, settle_seconds, extra_rules=0, samples=1,
             "synthetic_extra_rules": extra_rules,
             "browser_offline_for_pinned_baseline": offline,
             "source_package_sha256": source_sha256,
+            "source_filter_assets_sha256": public_assets_sha256,
             "test_package_sha256": test_sha256,
             "firefox_version": browser.capabilities.get("browserVersion"),
             "settle_seconds_after_filter_readiness": settle_seconds,
@@ -367,7 +389,9 @@ def capture(addon, firefox, settle_seconds, extra_rules=0, samples=1,
             "filter_engine": state,
             "firefox_version": browser.capabilities.get("browserVersion"),
             "source_package_sha256": source_sha256,
+            "source_filter_assets_sha256": public_assets_sha256,
             "test_package_sha256": test_sha256,
+            "settle_seconds_after_filter_readiness": settle_seconds,
         }
     finally:
         browser.quit()

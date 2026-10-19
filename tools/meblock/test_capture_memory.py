@@ -10,6 +10,7 @@ from zipfile import ZipFile
 from capture_memory import (
     BUILT_IN_LIST, extension_process_explicit_mib,
     extension_process_explicit_summary, synthetic_xpi,
+    source_filter_assets_sha256,
     validated_engine_state, wait_for_stable_engine,
 )
 
@@ -40,6 +41,27 @@ class CaptureMemoryTests(unittest.TestCase):
                     b"||mb-memory-0000002.example.invalid^\n",
                 )
                 self.assertEqual(archive.read("manifest.json"), b'{"version":"1"}')
+
+    def test_public_filter_asset_fingerprint_is_content_based(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            one, two, modified = (
+                root / "first.xpi", root / "second.xpi", root / "modified.xpi",
+            )
+            with ZipFile(one, "w") as archive:
+                archive.writestr(BUILT_IN_LIST, "||public.example.invalid^\n")
+                archive.writestr("js/background.js", "const one = 1;")
+            with ZipFile(two, "w") as archive:
+                archive.writestr("js/background.js", "const one = 2;")
+                archive.writestr(BUILT_IN_LIST, "||public.example.invalid^\n")
+            with ZipFile(modified, "w") as archive:
+                archive.writestr(BUILT_IN_LIST, "||different.example.invalid^\n")
+            self.assertEqual(
+                source_filter_assets_sha256(one), source_filter_assets_sha256(two)
+            )
+            self.assertNotEqual(
+                source_filter_assets_sha256(one), source_filter_assets_sha256(modified)
+            )
 
     def test_missing_bundled_list_fails(self):
         with tempfile.TemporaryDirectory() as root:
