@@ -19,7 +19,7 @@ from filtering_benchmark import valid_rows
 ROOT = Path(__file__).resolve().parents[2]
 BUILD_ROOT = ROOT / "dist" / "build"
 RULE_RE = re.compile(
-    r"(@@)?\|\|([a-z0-9.-]+)\^(?:\$(script|image|xmlhttprequest))?",
+    r"(@@)?\|\|([a-z0-9.-]+)\^(?:\$([a-z0-9,~\-]+))?",
     re.ASCII,
 )
 REQUEST_TYPES = {
@@ -27,7 +27,9 @@ REQUEST_TYPES = {
     "script": ("script", "probe.js"),
     "image": ("image", "probe.png"),
     "xmlhttprequest": ("xmlhttprequest", "probe.json"),
+    "xhr": ("xmlhttprequest", "probe.json"),
 }
+PARTY_OPTIONS = {"third-party", "3p", "1p", "~third-party"}
 MAX_REQUESTS = 20000
 
 
@@ -44,7 +46,18 @@ def recognized_rule(line):
         or not labels[-1].isalpha()
     ):
         return None
-    return (line, host, matched.group(3))
+    options = matched.group(3)
+    if options is not None:
+        tokens = options.split(",")
+        types = [token for token in tokens if token in REQUEST_TYPES]
+        parties = [token for token in tokens if token in PARTY_OPTIONS]
+        if (
+            len(tokens) != len(set(tokens)) or
+            len(types) > 1 or len(parties) > 1 or
+            len(types) + len(parties) != len(tokens)
+        ):
+            return None
+    return (line, host, options)
 
 
 def mapped_selected_assets(archive, selected_keys):
@@ -158,15 +171,24 @@ def bundled_asset_fingerprint(build):
 
 
 def build_probes(archive, *, shard_index, shard_count, max_requests=MAX_REQUESTS,
-                 selected_keys=None):
+                 selected_keys=None, rule_family="all"):
     if type(shard_count) is not int or shard_count < 1:
         raise ValueError("Shard count must be positive")
     if type(shard_index) is not int or not 0 <= shard_index < shard_count:
         raise ValueError("Shard index must lie within the shard count")
     if type(max_requests) is not int or max_requests < 4:
         raise ValueError("Request cap must be at least four")
+    if rule_family not in ("all", "exception", "blocking"):
+        raise ValueError("Unknown rule family")
     all_rules, coverage = collect_bundled_rules(archive, selected_keys=selected_keys)
-    shard = [rule for i, rule in enumerate(all_rules) if i % shard_count == shard_index]
+    exception_count = sum(rule.startswith("@@") for rule in all_rules)
+    if rule_family == "exception":
+        family_rules = [rule for rule in all_rules if rule.startswith("@@")]
+    elif rule_family == "blocking":
+        family_rules = [rule for rule in all_rules if not rule.startswith("@@")]
+    else:
+        family_rules = all_rules
+    shard = [rule for i, rule in enumerate(family_rules) if i % shard_count == shard_index]
     if not shard:
         raise ValueError("Selected shard contains no eligible simple-host rules")
     if len(shard) * 4 > max_requests:
@@ -177,7 +199,10 @@ def build_probes(archive, *, shard_index, shard_count, max_requests=MAX_REQUESTS
         if parsed is None:
             raise AssertionError("Eligible rule was not recognized")
         _, host, option = parsed
-        request_type, filename = REQUEST_TYPES[option]
+        tokens = (option or "").split(",")
+        request_option = next((token for token in tokens if token in REQUEST_TYPES),
+                              None)
+        request_type, filename = REQUEST_TYPES[request_option]
         labels = host.split(".")
         near_miss = "near-" + labels[0] + "." + ".".join(labels[1:])
         positive = f"https://{host}/{filename}"
@@ -188,6 +213,10 @@ def build_probes(archive, *, shard_index, shard_count, max_requests=MAX_REQUESTS
     return valid_rows(rows), {
         "schema": "meblock-default-rule-probes-v1",
         **coverage,
+        "rule_family": rule_family,
+        "family_rule_unique": len(family_rules),
+        "eligible_exception_rule_unique": exception_count,
+        "eligible_blocking_rule_unique": len(all_rules) - exception_count,
         "shard_index": shard_index,
         "shard_count": shard_count,
         "simple_host_rules_in_shard": len(shard),
@@ -195,9 +224,13 @@ def build_probes(archive, *, shard_index, shard_count, max_requests=MAX_REQUESTS
         "near_miss_requests": len(shard) * 2,
         "request_count": len(rows),
         "behavior_scope": (
-            "Bundled public simple host-anchored candidates only, which may "
-            "include unselected or shadowed rules. Differential decisions and "
-            "modifiers against upstream, not isolated proof each rule fired."
+            "Bundled public simple host-anchored candidates and a restricted "
+            "subset of request-type/party modifiers only. Some rules can be "
+            "shadowed or have a false positive from another rule. Each candidate "
+            "uses external-reader and same-host document origins; their near-"
+            "miss requests need not have identical party context. Differential "
+            "decisions/modifiers, NOT isolated rule attribution or an exhaustive "
+            "precedence oracle."
         ),
     }
 
@@ -208,6 +241,10 @@ def main(argv=None):
     parser.add_argument("--out", type=Path, default=BUILD_ROOT / "default-rule-probes.json")
     parser.add_argument("--shards", type=int, default=256)
     parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument(
+        "--family", choices=("all", "exception", "blocking"), default="all",
+        help="Create disjoint shards within one selected default rule family",
+    )
     parser.add_argument(
         "--selected-run", type=Path,
         help="Ignored, disposable Firefox run JSON with live selected-filter-list keys",
@@ -228,7 +265,7 @@ def main(argv=None):
         with ZipFile(args.addon) as archive:
             rows, coverage = build_probes(
                 archive, shard_index=args.shard_index, shard_count=args.shards,
-                selected_keys=selected,
+                selected_keys=selected, rule_family=args.family,
             )
         output.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(rows, separators=(",", ":"), ensure_ascii=False) + "\n"

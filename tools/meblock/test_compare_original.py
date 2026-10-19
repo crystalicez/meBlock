@@ -279,7 +279,17 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(result["no_distinguishable_result_in_tested_contexts"], 1)
         self.assertEqual(result["positive_requests_blocked"], 2)
         self.assertEqual(result["near_miss_requests_blocked"], 0)
+        self.assertEqual(result["positive_requests_explicitly_allowed"], 0)
+        self.assertEqual(result["near_miss_requests_explicitly_allowed"], 0)
         self.assertNotIn("https://", json.dumps(result))
+        allowed = {
+            "outcomes": [2, 0, 0, 0],
+            "modifier_masks": [0, 0, 0, 0],
+        }
+        observed = runner.summarize_candidate_effects(allowed, 1)
+        self.assertEqual(observed["positive_requests_explicitly_allowed"], 1)
+        self.assertEqual(observed["near_miss_requests_explicitly_allowed"], 0)
+        self.assertEqual(observed["at_least_one_context_distinguishable_candidates"], 1)
         with self.assertRaisesRegex(ValueError, "Malformed per-rule"):
             runner.summarize_candidate_effects({
                 **observation, "modifier_masks": [0] * 11
@@ -396,6 +406,23 @@ class CompareTests(unittest.TestCase):
             self.assertEqual(safe["request_count"], 4)
             self.assertEqual(safe["bundled_asset_contents_sha256"], "a" * 64)
             self.assertNotIn("private_raw_filter", safe)
+            family_manifest = {
+                **manifest,
+                "rule_family": "exception", "family_rule_unique": 1,
+                "eligible_exception_rule_unique": 1,
+                "eligible_blocking_rule_unique": 15,
+            }
+            sidecar.write_text(json.dumps(family_manifest), encoding="utf-8")
+            with_family = runner.read_rule_derived_manifest(
+                dataset, payload, rows, True
+            )
+            self.assertEqual(with_family["rule_family"], "exception")
+            self.assertEqual(with_family["family_rule_unique"], 1)
+            family_manifest["eligible_blocking_rule_unique"] = 14
+            sidecar.write_text(json.dumps(family_manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "rule-family provenance"):
+                runner.read_rule_derived_manifest(dataset, payload, rows, True)
+            sidecar.write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "require --default-lists"):
                 runner.read_rule_derived_manifest(dataset, payload, rows, False)
             with self.assertRaisesRegex(ValueError, "differs"):

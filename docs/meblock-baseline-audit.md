@@ -25,7 +25,7 @@ No performance change is justified solely by that estimate.
 | Paired memory uncertainty and null controls | **Verified in three independent 300-second same-XPI pairs** | On default enabled lists and six isolated Firefox profiles, signed whole-process deltas were +0.074, -0.036 and +0.031 MiB; maximum observed absolute deviation was 0.074 MiB, paired bootstrap 95% interval [-0.036, +0.074] MiB, exact sign-test p=1.0. The runner marks this CONTROL, never optimization. A three-pair control does not bound all noise or attribute memory to an addon; a directional *candidate* process-wide signal needs at least six independent long pairs and additional checks |
 | Stock/default-lists RAM baseline | **Three independent 300-second same-XPI negative-control pairs completed**; distinct-build candidate baseline outstanding | `memory_experiment.py --default-lists` pins the observed compiled network count (252,243), cosmetic count (44,192), ten selected default lists, their hashes and matching Firefox version across all six profiles, with no synthetic rule addition. The runner now additionally validates enabled-list counts, rejects instrumented performance XPIs, and reports observed absolute paired process noise. No claims of extension-private RAM reductions |
 | Reproducible steady-state A/B memory | **Identical-XPI control complete; independent different-build comparison not yet** | Three alternating A/B pairs of the same XPI passed engine-readiness and post-capture state validation after 300 seconds each. An earlier uncontrolled online pair and synthetic-filter-count drift are not comparable. Actual upstream-versus-optimized-build confirmation still requires its own pinned 5-minute AB/BA experiment with enough repeats for the claimed effect; this control must not be presented as that comparison |
-| Default-list-derived network request coverage | Verified a selected-list-pinned shard in real Firefox; not exhaustive | The live disposable Firefox default profile selected ten lists; **eight map to public files bundled in the XPI** and two do not. The generator now pins the live selected-key SHA-256 and creates 1,460 first-/third-party positive and near-miss requests from 365 simple hostname-anchored candidates in shard 0/256. Of 197,055 syntax-classified lines in the eight selected public files, 93,326 distinct simple host rules are eligible for this generator, not individually proven. The remaining 255 shards and other rule types require further checks |
+| Default-list-derived network request coverage | **Selected-list-pinned exception family verified in Firefox, other families incomplete** | Ten lists were selected; eight map to bundled public text, two do not. Expanded simple-host parsing to safe first/third-party and request-type modifiers: **99,120** distinct eligible candidates (98,955 blocking; **165 exceptions**) in 197,055 syntax-classified source lines. A targeted exception-only run checked **all 165 eligible exception candidates / 660 requests** across two A/B pairs and four disposable Firefox profiles, with exact decision/modifier parity and zero injected rules. **11/165** candidates had distinguishable outcomes in tested contexts, **154/165** were not individually observable; complex exception modifiers, priorities, the other active sources and other blocking shards remain untested |
 | Individual default-list rule behavior | **Not exhaustively verified** | The running browser reports compiled totals and selected-list fingerprints, but neither proves that each default-list rule has correct behavior in every URL, request-type, frame, priority, exception or modifier context. Full exhaustive context combinations are not feasible; use per-rule differential cases and targeted rule-interaction regressions for the code being optimized |
 | Per-rule cosmetic/scriptlet browser behavior | Verified in disposable Firefox; still synthetic | Fixture v5 checks fixed-index boolean vectors for 96 cosmetic targets, all 96 corresponding near-miss nodes, 32 independent visible controls, each of 12 scriptlet targets and each of 12 untouched scriptlet near misses. Missing nodes and changed positions fail even if aggregate counts remain the same. A no-addon control checks inverse blocking outcomes; 2 alternating A/B pairs with byte-identical builds passed in Firefox |
 | Extra 600k synthetic rules | No longer required for baseline | The prior hostname-heavy and mixed-network synthetic experiments remain opt-in stress-test tools only; they are **not** part of current default-list RAM or performance acceptance. No private subscriptions are copied |
@@ -58,6 +58,24 @@ not exhaustive proof of correctness for a proposed optimization.
 
 ## Actual Firefox validation, 2026-10-19
 
+- Extended default-list rule-derived probe parser to recognize simple
+  hostname exceptions/blocks with one optional request type and one
+  first/third-party qualifier, rejecting unknown, contradictory or action
+  modifiers. Selection remains pinned to **10 active default lists**, of
+  which eight have bundled public text. The eligible public candidates
+  rose from 93,326 basic shapes to **99,120** (98,955 blocks and 165
+  exceptions). A **complete exception-family probe** across two actual
+  A/B pairs (four disposable Firefox profiles), 660 requests per
+  profile, matched every upstream-vs-fork decision and modifier mask,
+  page control and selected-list fingerprint with **zero extra rules**.
+  Of the 165 exception candidates, **11** had a distinguishable
+  matched-versus-near-miss decision/modifier result in at least one tested
+  context, while **154** did not. Only **9 positive requests** were
+  explicitly allowed, and 10 positive requests were blocked by the full
+  engine. This is **not proof of correct exception override precedence**:
+  an exception without a matching block may have no observable effect,
+  and all compared builds were byte-identical same-code controls.
+  Verdict CONTROL; no speedup or completed per-rule behavioral claim.
 - **Default-lists-only steady-state RAM noise control completed:** three
   independent alternating A/B pairs (six disposable Firefox 157 profiles),
   **300 seconds after verified filter readiness in every profile**, with

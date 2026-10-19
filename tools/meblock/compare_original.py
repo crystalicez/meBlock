@@ -870,6 +870,28 @@ def read_rule_derived_manifest(dataset, payload, rows, default_lists):
     assets = manifest.get("bundled_asset_contents_sha256")
     if not isinstance(assets, str) or re.fullmatch(r"[0-9a-f]{64}", assets) is None:
         raise ValueError("Rule-derived asset digest is invalid")
+    family = manifest.get("rule_family")
+    family_fields = (
+        "family_rule_unique", "eligible_exception_rule_unique",
+        "eligible_blocking_rule_unique",
+    )
+    if family is not None:
+        if (
+            family not in ("all", "exception", "blocking")
+            or any(type(manifest.get(key)) is not int or manifest[key] < 0
+                   for key in family_fields)
+            or (manifest["eligible_exception_rule_unique"] +
+                manifest["eligible_blocking_rule_unique"] !=
+                manifest["simple_host_rule_unique"])
+            or manifest["family_rule_unique"] != {
+                "all": manifest["simple_host_rule_unique"],
+                "exception": manifest["eligible_exception_rule_unique"],
+                "blocking": manifest["eligible_blocking_rule_unique"],
+            }[family]
+            or manifest["simple_host_rules_in_shard"] >
+                manifest["family_rule_unique"]
+        ):
+            raise ValueError("Invalid default filter rule-family provenance")
     selected_digest = manifest.get("selected_list_keys_sha256")
     if selected_digest is not None:
         if (not isinstance(selected_digest, str) or
@@ -881,6 +903,8 @@ def read_rule_derived_manifest(dataset, payload, rows, default_lists):
                 manifest["selected_list_count"]):
             raise ValueError("Invalid selected default-list provenance")
     allowed = ("schema", *numbers, "dataset_sha256", "bundled_asset_contents_sha256")
+    if family is not None:
+        allowed += ("rule_family", *family_fields)
     allowed += (("selected_list_keys_sha256", "selected_list_count",
                  "selected_without_bundled_asset_count") if selected_digest is not None
                 else ())
@@ -903,6 +927,7 @@ def summarize_candidate_effects(reference, candidates):
         raise ValueError("Malformed per-rule result vectors")
     same_host_frame = external_reader_frame = both = 0
     positive_blocked = near_miss_blocked = 0
+    positive_allowed = near_miss_allowed = 0
     for offset in range(0, len(values), 4):
         first_diff = (
             (values[offset], modifiers[offset]) !=
@@ -919,6 +944,8 @@ def summarize_candidate_effects(reference, candidates):
         both += int(first_diff and third_diff)
         positive_blocked += int(values[offset] == 1) + int(values[offset + 2] == 1)
         near_miss_blocked += int(values[offset + 1] == 1) + int(values[offset + 3] == 1)
+        positive_allowed += int(values[offset] == 2) + int(values[offset + 2] == 2)
+        near_miss_allowed += int(values[offset + 1] == 2) + int(values[offset + 3] == 2)
     return {
         "candidate_rules": candidates,
         "same_host_frame_distinguishable_candidates": same_host_frame,
@@ -932,6 +959,8 @@ def summarize_candidate_effects(reference, candidates):
         ),
         "positive_requests_blocked": positive_blocked,
         "near_miss_requests_blocked": near_miss_blocked,
+        "positive_requests_explicitly_allowed": positive_allowed,
+        "near_miss_requests_explicitly_allowed": near_miss_allowed,
         "scope": (
             "Decision+modifier outcome of matched and near-miss URLs. "
             "A distinguishable outcome does not isolate which filter caused it; "

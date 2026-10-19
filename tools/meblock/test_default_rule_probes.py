@@ -46,14 +46,14 @@ class DefaultRuleProbeTests(unittest.TestCase):
                 rows, coverage = probes.build_probes(
                     data, shard_index=0, shard_count=1
                 )
-        self.assertEqual(coverage["simple_host_rule_unique"], 3)
-        self.assertEqual(coverage["simple_host_rules_in_shard"], 3)
-        self.assertEqual(coverage["request_count"], 12)
-        self.assertEqual(coverage["positive_requests"], 6)
-        self.assertEqual(coverage["near_miss_requests"], 6)
+        self.assertEqual(coverage["simple_host_rule_unique"], 4)
+        self.assertEqual(coverage["simple_host_rules_in_shard"], 4)
+        self.assertEqual(coverage["request_count"], 16)
+        self.assertEqual(coverage["positive_requests"], 8)
+        self.assertEqual(coverage["near_miss_requests"], 8)
         self.assertEqual(coverage["bundled_asset_count"], 2)
         self.assertEqual(coverage["noncomment_filter_lines"], 7)
-        self.assertEqual(coverage["unsupported_or_duplicate_lines"], 4)
+        self.assertEqual(coverage["unsupported_or_duplicate_lines"], 3)
         self.assertEqual(coverage["syntax_input_line_counts"], {
             "network_pattern_or_modifier": 5,
             "network_exception_or_modifier": 1,
@@ -76,6 +76,69 @@ class DefaultRuleProbeTests(unittest.TestCase):
              "url": "https://near-beta.example/probe.png", "cpt": "image"},
         ])
         self.assertEqual({r["cpt"] for r in rows}, {"image", "script"})
+
+    def test_party_restricted_default_rules_and_exception_family_shards(self):
+        rules = [
+            "||alpha.example^$third-party",
+            "||beta.example^$3p",
+            "@@||gamma.example^$script,1p",
+            "@@||delta.example^$xhr,1p",
+            "@@||epsilon.example^$image,~third-party",
+            "||zeta.example^$script,third-party",
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            addon = Path(directory) / "stock.xpi"
+            with ZipFile(addon, "w") as output:
+                output.writestr(
+                    "assets/ublock/filters.min.txt", "\n".join(rules) + "\n"
+                )
+            with ZipFile(addon) as source:
+                all_rows, all_coverage = probes.build_probes(
+                    source, shard_index=0, shard_count=1,
+                )
+                exception_rows, selected = probes.build_probes(
+                    source, shard_index=0, shard_count=1,
+                    rule_family="exception",
+                )
+                first, _ = probes.build_probes(
+                    source, shard_index=0, shard_count=2,
+                    rule_family="exception",
+                )
+                second, _ = probes.build_probes(
+                    source, shard_index=1, shard_count=2,
+                    rule_family="exception",
+                )
+        self.assertEqual(len(all_rows), 24)
+        self.assertEqual(all_coverage["simple_host_rule_unique"], 6)
+        self.assertEqual(all_coverage["eligible_exception_rule_unique"], 3)
+        self.assertEqual(all_coverage["eligible_blocking_rule_unique"], 3)
+        self.assertEqual(selected["rule_family"], "exception")
+        self.assertEqual(selected["family_rule_unique"], 3)
+        self.assertEqual(len(exception_rows), 12)
+        self.assertEqual(first + second, [
+            row for group in (
+                exception_rows[0:4], exception_rows[8:12], exception_rows[4:8]
+            ) for row in group
+        ])
+        self.assertEqual(
+            {row["cpt"] for row in exception_rows},
+            {"script", "image", "xmlhttprequest"},
+        )
+        self.assertEqual(
+            exception_rows[0:2],
+            [
+                {"frameUrl": "https://reader.example.invalid/page",
+                 "url": "https://delta.example/probe.json",
+                 "cpt": "xmlhttprequest"},
+                {"frameUrl": "https://reader.example.invalid/page",
+                 "url": "https://near-delta.example/probe.json",
+                 "cpt": "xmlhttprequest"},
+            ],
+        )
+        self.assertEqual(
+            set(tuple(row.values()) for row in first) &
+            set(tuple(row.values()) for row in second), set(),
+        )
 
     def test_every_eligible_rule_is_assigned_to_exactly_one_shard(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -105,8 +168,14 @@ class DefaultRuleProbeTests(unittest.TestCase):
     def test_unsupported_and_bad_hostname_shapes_do_not_become_requests(self):
         for line in (
             "||-bad.example^", "||no-suffix^", "||bad..example^",
-            "||nested.example^$third-party", "/ads[.]example/",
+            "||nested.example^$redirect-rule=noop.js", "/ads[.]example/",
             "sample.example##.cosmetic", "||mismatch.example^$redirect=noop.js",
+            "||party.example^$3p,1p",
+            "||party.example^$third-party,3p",
+            "||types.example^$script,image",
+            "@@||types.example^$script,script",
+            "||other.example^$badfilter",
+            "||other.example^$domain=example.org",
         ):
             with self.subTest(line=line):
                 self.assertIsNone(probes.recognized_rule(line))
@@ -114,6 +183,14 @@ class DefaultRuleProbeTests(unittest.TestCase):
                          ("||alpha.example^", "alpha.example", None))
         self.assertEqual(probes.recognized_rule("@@||beta.example^$image"),
                          ("@@||beta.example^$image", "beta.example", "image"))
+        self.assertEqual(
+            probes.recognized_rule("@@||allowed.example^$script,1p"),
+            ("@@||allowed.example^$script,1p", "allowed.example", "script,1p"),
+        )
+        self.assertEqual(
+            probes.recognized_rule("||tracking.example^$third-party"),
+            ("||tracking.example^$third-party", "tracking.example", "third-party"),
+        )
 
     def test_live_enabled_list_mapping_excludes_unselected_bundled_assets(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -222,10 +299,27 @@ class DefaultRuleProbeTests(unittest.TestCase):
                             str(root / "outside.json"),
                         ])
                 self.assertEqual(caught.exception.code, 2)
+                exception_output = build / "exception-only.json"
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(
+                        probes.main([
+                            "--addon", str(addon), "--out", str(exception_output),
+                            "--family", "exception", "--shards", "1",
+                        ]), 0,
+                    )
+                exception_payload = json.loads(exception_output.read_bytes())
+                exception_manifest = json.loads(
+                    exception_output.with_suffix(".json.manifest.json").read_bytes()
+                )
+                self.assertEqual(len(exception_payload), 4)
+                self.assertEqual(exception_manifest["rule_family"], "exception")
+                self.assertEqual(exception_manifest["family_rule_unique"], 1)
+                self.assertEqual(exception_manifest["eligible_exception_rule_unique"], 1)
+                self.assertEqual(exception_manifest["simple_host_rule_unique"], 4)
             payload = output.read_bytes()
             records = json.loads(payload)
             report = json.loads(output.with_suffix(".json.manifest.json").read_text())
-            self.assertEqual(len(records), 12)
+            self.assertEqual(len(records), 16)
             self.assertEqual(report["schema"], "meblock-default-rule-probes-v1")
             self.assertEqual(report["request_count"], len(records))
             self.assertEqual(hashlib.sha256(payload).hexdigest(), report["dataset_sha256"])

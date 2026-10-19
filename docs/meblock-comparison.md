@@ -57,11 +57,16 @@ python tools/meblock/default_rule_probes.py --addon dist/build/uBlock0.firefox.x
 python tools/meblock/compare_original.py --default-lists --dataset dist/build/default-rule-probes.json --runs 2
 ```
 
-The generator only recognizes the simple `||hostname^` and
-`@@||hostname^` forms, optionally restricted to `script`, `image`
-or `xmlhttprequest`. Each distinct eligible rule produces **four
-request contexts**: matching host and near-miss host, each from a
-first-party and third-party document. All URLs are fed to uBO's static
+The generator recognizes only conservative `||hostname^` block and
+`@@||hostname^` exception shapes, optionally restricted by one request
+kind (`script`, `image`, `xmlhttprequest` or `xhr`) and/or one party
+qualifier (`third-party`, `3p`, `1p` or `~third-party`). Conflicting,
+unknown, or action modifiers such as `redirect`, `csp`, `badfilter` and
+`domain=` are **rejected** rather than guessed. Each eligible rule emits
+**four request contexts**: matching/near-miss host from both a separate
+reader origin and a same-host document origin. A near-miss is not
+first-party to the same-host document; this is not an exhaustive party
+modifier truth table. All URLs are fed to uBO's static
 network matcher **without fetching those hostnames**. Neither tool injects
 a filter into the measured default-list builds in this mode.
 
@@ -71,6 +76,23 @@ a prior **private disposable Firefox run** to the generator:
 ```powershell
 python tools/meblock/default_rule_probes.py --addon dist/build/uBlock0.firefox.xpi --selected-run dist/build/meblock-comparison/SESSION/upstream-run-1.json --shards 256 --shard-index 0
 ```
+
+For an **exception-focused** smoke run, use the same pinned selected-run
+evidence with a separate output path and the `--family exception` selector:
+
+```powershell
+python tools/meblock/default_rule_probes.py --addon dist/build/uBlock0.firefox.xpi --selected-run dist/build/meblock-comparison/SESSION/upstream-run-1.json --family exception --shards 1 --out dist/build/meblock-exception-probes.json
+python tools/meblock/compare_original.py --default-lists --dataset dist/build/meblock-exception-probes.json --runs 2
+```
+
+`--family` can be `all`, `blocking` or `exception`. Each family shards
+independently, so `--shards` and `--shard-index` apply only *within* the
+chosen family; the manifest preserves allow/block candidate counts and
+is rejected if those counters are inconsistent. Unlike ordinary host
+blocks, many exception candidates may be shadowed or refer to contexts
+not triggered by these four requests. An explicit allow result is counted,
+but it does **not** independently prove that the specific exception rule
+caused the outcome or correctly overrides a blocker.
 
 Replace `SESSION` with the local ignored session directory. The generator
 uses the XPI's public list registry to map the browser's selected list keys
