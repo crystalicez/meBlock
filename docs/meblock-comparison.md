@@ -68,28 +68,38 @@ Those process-wide readings are secondary diagnostics, not reliable per-extensio
 
 ## Deterministic page-side workload
 
-The disposable Firefox fixture version 4 adds **96 cosmetic rules**, split
-evenly between class selectors, ID selectors and attribute selectors. The
-page contains one target for each rule, plus **32 visible controls** which
-must stay visible. It also adds **12 set-constant scriptlets** with distinct
-properties that are checked individually through an aggregate count.
+The disposable Firefox fixture version 5 has **96 cosmetic rules** (32 each
+using class, ID and attribute selectors). Each rule has a matching DOM target
+which must be hidden, and a separately indexed **near-miss control** which
+must stay visible. Another 32 unrelated DOM controls must also stay visible.
+There are **12 set-constant scriptlets** with a checked target property and
+an untouched near-miss property for each scriptlet.
 
-The browser's observation script reports the exact numbers of hidden
-cosmetic targets, visible controls and applied scriptlet properties. The
-without-addon run must find **0 hidden, 32 visible, 0 scriptlets applied**;
-each instrumented build must find **96 hidden, 32 visible, 12 applied**.
-The same checks run on every navigation in the loopback page p95 test,
-not just during first load. A wrong count fails the comparison rather
-than contributing a misleading fast timing sample.
+Firefox reports fixed-order boolean vectors rather than relying on aggregate
+counts: 96 target-presence checks, 96 cosmetic hiding decisions, 96 near-miss
+visibility decisions, 32 general visibility decisions, 12 scriptlet results
+and 12 scriptlet near-miss checks. The independent without-addon control
+expects all 96 targets present but unhidden, all 128 visibility controls
+visible and no scriptlet targets set. With an addon, all 96 targets must be
+hidden, all 128 visibility controls must stay visible and all 12 scriptlet
+targets must be set. The 12 scriptlet near-miss properties must remain
+untouched in either condition.
 
-This adds reproducible **page-side variety** to the browser regression
-suite. It is not a realistic 600,000-filter subscription distribution:
-the existing synthetic network corpus and these small deterministic DOM
-fixtures remain separate. It does not cover arbitrary procedural
-cosmetic selectors, advanced scriptlets, or normal user browsing.
-Compare navigation p95 values only with the **same fixture version** and
-pinned rule inputs; a change in fixture content invalidates comparisons
-with earlier p95 runs.
+Every boolean position is compared to the expected result after the initial
+load and after **each** navigation used to measure local page-load p95.
+A missing DOM node, malformed vector, false positive or false negative
+rejects the run. Failures identify the field and failing rule indices.
+Counts remain diagnostics only: passing a count cannot compensate for
+incorrect per-rule behavior. Unit tests deliberately change individual
+positions without changing reported counts and require the comparison to
+fail.
+
+This is a controlled behavior fixture, **not** a demonstration that every
+possible option, filter interaction or any of the 600,000 production-like
+rules has been exercised. The 600k network corpus is tested separately.
+The fixture does not model arbitrary procedural cosmetic rules, advanced
+scriptlets or normal user browsing. Only compare navigation timings with
+the **same fixture version** and equivalent pinned inputs.
 
 ## Controlled Firefox page navigation p95
 

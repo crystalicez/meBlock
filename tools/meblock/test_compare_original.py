@@ -1,6 +1,7 @@
 """Regression tests for the two-build Firefox comparison tool."""
 
 import importlib.util
+from copy import deepcopy
 import json
 from pathlib import Path
 import tempfile
@@ -41,7 +42,7 @@ def make_run(outcomes=None, speed=7, modifier_masks=None):
     blocked = sum(v == 1 for v in outcomes)
     return {
         "outcomes": outcomes, "modifier_masks": modifier_masks, "us_per_request": speed,
-        "browser_behavior": dict(WITH_ADDON),
+        "browser_behavior": deepcopy(WITH_ADDON),
         "browser_parameters": dict(PARAMETERS_WITH_ADDON),
         "dynamic_firewall": {
             "cases": dict(DYNAMIC_FIREWALL_EXPECTED),
@@ -92,7 +93,7 @@ def buffer_sample(size=1024):
 
 class CompareTests(unittest.TestCase):
     def test_page_side_fixture_is_deterministic_and_has_three_selector_shapes(self):
-        self.assertEqual(FIXTURE_VERSION, 4)
+        self.assertEqual(FIXTURE_VERSION, 5)
         self.assertEqual(EXTRA_COSMETIC_COUNT, 96)
         self.assertEqual(EXTRA_VISIBLE_COUNT, 32)
         self.assertEqual(EXTRA_SCRIPTLET_COUNT, 12)
@@ -102,6 +103,7 @@ class CompareTests(unittest.TestCase):
         self.assertIn('127.0.0.1##[data-mb-extra="002"]', RULES)
         self.assertIn("127.0.0.1##+js(set-constant, mbFixtureVar011, true)", RULES)
         self.assertEqual(PAGE.count("cosmetic probe</div>"), 96)
+        self.assertEqual(PAGE.count("cosmetic near miss</div>"), 96)
         self.assertEqual(PAGE.count("visible probe</div>"), 32)
         self.assertEqual(WITH_ADDON["extra_cosmetic_hidden_count"], 96)
         self.assertEqual(WITH_ADDON["extra_visible_count"], 32)
@@ -109,6 +111,93 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(WITHOUT_ADDON["extra_cosmetic_hidden_count"], 0)
         self.assertEqual(WITHOUT_ADDON["extra_visible_count"], 32)
         self.assertEqual(WITHOUT_ADDON["extra_scriptlets_applied_count"], 0)
+        for expected, hidden, applied in (
+            (WITHOUT_ADDON, False, False),
+            (WITH_ADDON, True, True),
+        ):
+            self.assertEqual(expected["extra_cosmetic_present_by_index"], [True] * 96)
+            self.assertEqual(expected["extra_cosmetic_hidden_by_index"], [hidden] * 96)
+            self.assertEqual(expected["extra_cosmetic_near_miss_visible_by_index"], [True] * 96)
+            self.assertEqual(expected["extra_visible_by_index"], [True] * 32)
+            self.assertEqual(expected["extra_scriptlets_applied_by_index"], [applied] * 12)
+            self.assertEqual(expected["extra_scriptlet_near_miss_untouched_by_index"], [True] * 12)
+
+    def test_every_page_side_rule_index_fails_when_its_result_is_wrong(self):
+        for key in (
+            "extra_cosmetic_present_by_index",
+            "extra_cosmetic_hidden_by_index",
+            "extra_cosmetic_near_miss_visible_by_index",
+            "extra_visible_by_index",
+            "extra_scriptlets_applied_by_index",
+            "extra_scriptlet_near_miss_untouched_by_index",
+        ):
+            for index in range(len(WITH_ADDON[key])):
+                with self.subTest(key=key, index=index):
+                    changed = deepcopy(WITH_ADDON)
+                    changed[key][index] = not changed[key][index]
+                    self.assertEqual(
+                        runner.fixture_page_mismatches(changed, WITH_ADDON),
+                        [{"field": key, "indices_first_25": [index]}],
+                    )
+        self.assertEqual(runner.fixture_page_mismatches(deepcopy(WITH_ADDON), WITH_ADDON), [])
+        self.assertEqual(runner.fixture_page_mismatches(deepcopy(WITHOUT_ADDON), WITHOUT_ADDON), [])
+
+    def test_preserved_aggregate_counts_do_not_hide_wrong_rule_outcomes(self):
+        original, candidate = make_run(), make_run()
+        candidate["browser_behavior"]["extra_cosmetic_hidden_by_index"][41] = False
+        candidate["browser_behavior"]["extra_cosmetic_near_miss_visible_by_index"][41] = False
+        candidate["browser_behavior"]["extra_scriptlets_applied_by_index"][8] = False
+        self.assertEqual(candidate["browser_behavior"]["extra_cosmetic_hidden_count"], 96)
+        self.assertEqual(candidate["browser_behavior"]["extra_scriptlets_applied_count"], 12)
+        result = runner.compare(
+            {"upstream": [original], "meblock": [candidate]}, DATASET,
+            identical_build=True,
+        )
+        self.assertEqual(result["verdict"], "FAIL: behavioral regression")
+        self.assertFalse(result["correctness"]["browser_page_match"])
+        failures = result["correctness"]["browser_page_mismatches_first_25"]
+        self.assertEqual(
+            [(failure["field"], failure["indices_first_25"]) for failure in failures],
+            [
+                ("extra_cosmetic_hidden_by_index", [41]),
+                ("extra_cosmetic_near_miss_visible_by_index", [41]),
+                ("extra_scriptlets_applied_by_index", [8]),
+            ],
+        )
+
+    def test_missing_controls_and_malformed_vectors_are_rejected(self):
+        for expected in (WITH_ADDON, WITHOUT_ADDON):
+            changed = deepcopy(expected)
+            changed["extra_visible_by_index"][3] = False
+            self.assertEqual(
+                runner.fixture_page_mismatches(changed, expected),
+                [{"field": "extra_visible_by_index", "indices_first_25": [3]}],
+            )
+            changed = deepcopy(expected)
+            changed["extra_cosmetic_present_by_index"][19] = False
+            self.assertEqual(
+                runner.fixture_page_mismatches(changed, expected),
+                [{"field": "extra_cosmetic_present_by_index", "indices_first_25": [19]}],
+            )
+            changed = deepcopy(expected)
+            changed["extra_scriptlet_near_miss_untouched_by_index"] = [True] * 11
+            self.assertEqual(
+                runner.fixture_page_mismatches(changed, expected),
+                [{"field": "extra_scriptlet_near_miss_untouched_by_index",
+                  "error": "missing or incomplete rule vector"}],
+            )
+            changed = deepcopy(expected)
+            changed["extra_visible_by_index"][3] = 1
+            self.assertEqual(
+                runner.fixture_page_mismatches(changed, expected),
+                [{"field": "extra_visible_by_index", "indices_first_25": [3]}],
+            )
+            changed = deepcopy(expected)
+            changed["untrusted_private_field"] = "should not be copied to output"
+            result = runner.fixture_page_mismatches(changed, expected)
+            self.assertEqual(result, [
+                {"field": "page", "error": "unexpected or missing fields"}
+            ])
 
     def test_navigation_p95_samples_firefox_timing_and_checks_each_page(self):
         class FixtureBrowser:

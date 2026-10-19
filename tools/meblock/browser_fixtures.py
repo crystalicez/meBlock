@@ -6,7 +6,7 @@ filter rules and expected observations form one versioned behavior contract.
 
 from base64 import b64decode
 
-FIXTURE_VERSION = 4
+FIXTURE_VERSION = 5
 
 DYNAMIC_FIREWALL_EXPECTED = {
     "block": 1,
@@ -87,6 +87,12 @@ PAGE = PAGE.replace(
         for index in range(EXTRA_COSMETIC_COUNT)
     ) +
     ''.join(
+        f'<div id="mb-extra-{index:03}-near" '
+        f'class="mb-extra-class-{index:03}-near" '
+        f'data-mb-extra="{index:03}-near">cosmetic near miss</div>'
+        for index in range(EXTRA_COSMETIC_COUNT)
+    ) +
+    ''.join(
         f'<div class="mb-extra-visible" data-mb-control="{index:03}">'
         'visible probe</div>'
         for index in range(EXTRA_VISIBLE_COUNT)
@@ -139,6 +145,27 @@ const hidden = element => {
     return style.display === 'none' || style.visibility === 'hidden';
 };
 const isHidden = id => hidden(document.getElementById(id));
+const suffix = index => String(index).padStart(3, '0');
+const cosmeticPresent = Array.from({ length: 96 }, (_, index) =>
+    document.getElementById('mb-extra-' + suffix(index)) !== null
+);
+const cosmeticHidden = Array.from({ length: 96 }, (_, index) =>
+    isHidden('mb-extra-' + suffix(index))
+);
+const cosmeticNearMissVisible = Array.from({ length: 96 }, (_, index) => {
+    const element = document.getElementById('mb-extra-' + suffix(index) + '-near');
+    return Boolean(element && !hidden(element));
+});
+const visibleControls = Array.from({ length: 32 }, (_, index) => {
+    const element = document.querySelector('[data-mb-control="' + suffix(index) + '"]');
+    return Boolean(element && !hidden(element));
+});
+const scriptletApplied = Array.from({ length: 12 }, (_, index) =>
+    window['mbFixtureVar' + suffix(index)] === true
+);
+const scriptletNearMissUntouched = Array.from({ length: 12 }, (_, index) =>
+    !Object.prototype.hasOwnProperty.call(window, 'mbFixtureVar' + suffix(index) + '_near')
+);
 return {
     allowed_script: window.__meblock_allowed === true,
     blocked_script: window.__meblock_blocked === true,
@@ -152,13 +179,15 @@ return {
     xhr_allowed: window.__meblock_xhr_allowed === true,
     xhr_blocked: window.__meblock_xhr_blocked === true,
     scriptlet_applied: window.__meblock_scriptlet_set === true,
-    extra_cosmetic_hidden_count: Array.from(document.querySelectorAll('[data-mb-extra]'))
-        .filter(element => isHidden(element.id)).length,
-    extra_visible_count: Array.from(document.querySelectorAll('[data-mb-control]'))
-        .filter(element => !hidden(element)).length,
-    extra_scriptlets_applied_count: Array.from({ length: 12 }, (_, index) =>
-        window['mbFixtureVar' + String(index).padStart(3, '0')] === true
-    ).filter(Boolean).length,
+    extra_cosmetic_present_by_index: cosmeticPresent,
+    extra_cosmetic_hidden_by_index: cosmeticHidden,
+    extra_cosmetic_near_miss_visible_by_index: cosmeticNearMissVisible,
+    extra_visible_by_index: visibleControls,
+    extra_scriptlets_applied_by_index: scriptletApplied,
+    extra_scriptlet_near_miss_untouched_by_index: scriptletNearMissUntouched,
+    extra_cosmetic_hidden_count: cosmeticHidden.filter(Boolean).length,
+    extra_visible_count: visibleControls.filter(Boolean).length,
+    extra_scriptlets_applied_count: scriptletApplied.filter(Boolean).length,
     control_visible: !isHidden('control-target')
 };
 """
@@ -176,6 +205,12 @@ WITHOUT_ADDON = {
     "xhr_allowed": True,
     "xhr_blocked": True,
     "scriptlet_applied": False,
+    "extra_cosmetic_present_by_index": [True] * EXTRA_COSMETIC_COUNT,
+    "extra_cosmetic_hidden_by_index": [False] * EXTRA_COSMETIC_COUNT,
+    "extra_cosmetic_near_miss_visible_by_index": [True] * EXTRA_COSMETIC_COUNT,
+    "extra_visible_by_index": [True] * EXTRA_VISIBLE_COUNT,
+    "extra_scriptlets_applied_by_index": [False] * EXTRA_SCRIPTLET_COUNT,
+    "extra_scriptlet_near_miss_untouched_by_index": [True] * EXTRA_SCRIPTLET_COUNT,
     "extra_cosmetic_hidden_count": 0,
     "extra_visible_count": EXTRA_VISIBLE_COUNT,
     "extra_scriptlets_applied_count": 0,
@@ -202,6 +237,8 @@ WITH_ADDON = {
     "cosmetic_hidden": True,
     "xhr_blocked": False,
     "scriptlet_applied": True,
+    "extra_cosmetic_hidden_by_index": [True] * EXTRA_COSMETIC_COUNT,
+    "extra_scriptlets_applied_by_index": [True] * EXTRA_SCRIPTLET_COUNT,
     "extra_cosmetic_hidden_count": EXTRA_COSMETIC_COUNT,
     "extra_scriptlets_applied_count": EXTRA_SCRIPTLET_COUNT,
 }

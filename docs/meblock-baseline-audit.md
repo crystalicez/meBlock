@@ -21,7 +21,7 @@ measurement**. No performance change is justified solely by that estimate.
 | Memory process measurement | Verified, but **process-wide** | `analyze_memory.py` validates unit=bytes, reads raw Firefox JSON.gz, sums leaf reporters without parent+child duplication and rejects incomplete scopes. Extensions-process `explicit` is **not** the extension's private retained memory |
 | Paired memory uncertainty and null controls | Verified in local tests and a real short Firefox null control | Reports paired delta range, median absolute deviation, deterministic bootstrap interval and exact two-sided sign-test p-value. Three pairs alone cannot justify a directional claim. Identical-XPI build mode is explicitly flagged as a negative control, even if the apparent difference is large. A directional process-wide signal requires at least six independent 300-second pairs and additional checks; it is never per-addon attribution |
 | Reproducible steady-state A/B memory | **Not yet** | An exploratory online 5-minute pair showed 57.621 vs 72.851 MiB for the whole Extensions process, but filter readiness and stable counts were not validated then. Later strict tests detected filter-list changes during capture, including a 600,000-to-600,122 network-count drift after five minutes **despite offline mode**. The capture tool now additionally persists `autoUpdate=false` in each disposable profile and fails closed when rules change; it requires independently matched 5-minute AB/BA pairs before any RAM claim |
-| Deterministic cosmetic/scriptlet browser workload | Verified on disposable Firefox fixtures; still synthetic | Fixture v4 adds 96 cosmetic selectors (class, ID, attribute), 12 set-constant scriptlets and 32 always-visible DOM controls. A without-addon control expects 0 hidden / 32 visible / 0 applied, while both extension builds must report 96 / 32 / 12 on each page navigation. This tests page-side filtering effects, not realistic subscription proportions |
+| Per-rule cosmetic/scriptlet browser behavior | Verified in disposable Firefox; still synthetic | Fixture v5 checks fixed-index boolean vectors for 96 cosmetic targets, all 96 corresponding near-miss nodes, 32 independent visible controls, each of 12 scriptlet targets and each of 12 untouched scriptlet near misses. Missing nodes and changed positions fail even if aggregate counts remain the same. A no-addon control checks inverse blocking outcomes; 2 alternating A/B pairs with byte-identical builds passed in Firefox |
 | 600k production-like filter composition | **Partially exercised, not representative** | The original 600k fixture uses hostname rules. The optional deterministic `mixed-network` fixture adds hostname, path, script, image/third-party and regex filters to test different network parser shapes. It does **not** represent the actual user's cosmetic, scriptlet or network-rule proportions; no personal subscriptions are copied |
 | Controlled page navigation p95 | Verified on a local synthetic fixture; not representative | Browser-side `PerformanceNavigationTiming` measures 20 fixture page navigations after two warm-ups per isolated profile and checks behavior on every visit. A four-profile same-build control passed, with observed per-run p95 from 61 to 81 ms, a noise signal and **not** a speedup. No public website or full browsing distribution |
 | Request latency confidence | **Not yet** | Matcher benchmark reports session means and paired uncertainty; loopback page p95 exists but no representative **request-level p95** or rigorous production-like page-load performance. Claiming "no slowdown" requires this |
@@ -30,6 +30,18 @@ measurement**. No performance change is justified solely by that estimate.
 
 ## Actual Firefox validation, 2026-10-19
 
+- Fixture v5 completed **two alternating A/B pairs across four disposable
+  Firefox profiles** with byte-identical upstream/fork code. Every actual
+  profile returned complete all-true vectors for 96 cosmetic target
+  presence checks, 96 hidden-rule effects, 96 visible near-miss controls,
+  32 additional visible controls, 12 applied scriptlets and 12 untouched
+  scriptlet near-miss variables. The independent without-addon control
+  correctly observed the inverse cosmetic/scriptlet behaviors. All
+  network decisions, modifiers and page behavior checks passed. Unit
+  tests also inject wrong rule indices while preserving aggregate counts
+  and verify that the comparison fails with the offending index. These
+  checks cover **every rule in the small controlled fixture**, not
+  every rule in a 600,000-filter distribution.
 - Fixture v4 was exercised in **three alternating upstream/fork Firefox A/B
   pairs** (six isolated profiles; identical compiled source). Each browser
   reported exactly **96 hidden cosmetic targets, 32 visible controls and

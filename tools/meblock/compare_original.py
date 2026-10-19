@@ -307,8 +307,9 @@ def measure_fixture_navigation(browser, endpoint, expected):
                 break
             time.sleep(0.05)
             observed = browser.execute_script(OBSERVATION_SCRIPT)
-        if observed != expected:
-            raise RuntimeError("Fixture behavior changed during navigation timing")
+        failures = fixture_page_mismatches(observed, expected)
+        if failures:
+            raise RuntimeError(f"Fixture behavior changed during navigation timing: {failures}")
         if index >= NAVIGATION_WARMUP:
             records.append({
                 "load_event_end_ms": timing.get("load_event_end_ms"),
@@ -318,13 +319,36 @@ def measure_fixture_navigation(browser, endpoint, expected):
     return records
 
 
+def fixture_page_mismatches(observed, expected):
+    if not isinstance(observed, dict):
+        return [{"field": "page", "error": "missing observation"}]
+    failures = []
+    for field, wanted in expected.items():
+        actual = observed.get(field)
+        if isinstance(wanted, list):
+            if not isinstance(actual, list) or len(actual) != len(wanted):
+                failures.append({"field": field, "error": "missing or incomplete rule vector"})
+                continue
+            wrong = [
+                index for index, (reference, value) in enumerate(zip(wanted, actual))
+                if type(value) is not bool or value is not reference
+            ]
+            if wrong:
+                failures.append({"field": field, "indices_first_25": wrong[:25]})
+        elif type(actual) is not type(wanted) or actual != wanted:
+            failures.append({"field": field, "error": "incorrect value"})
+    if set(observed) != set(expected):
+        failures.append({"field": "page", "error": "unexpected or missing fields"})
+    return failures
+
+
 def observe_page(browser, endpoint, expected):
     observed = None
     for attempt in range(3):
         browser.get(endpoint + f"/fixture?attempt={attempt}")
         for _ in range(16):
             observed = browser.execute_script(OBSERVATION_SCRIPT)
-            if observed == expected:
+            if not fixture_page_mismatches(observed, expected):
                 return observed
             time.sleep(0.25)
     return observed
@@ -349,9 +373,10 @@ def test_without_addon(endpoint, driver_binary, firefox_binary):
     browser = webdriver.Firefox(options=options, service=service)
     try:
         observed = observe_page(browser, endpoint, WITHOUT_ADDON)
-        if observed != WITHOUT_ADDON:
+        control_failures = fixture_page_mismatches(observed, WITHOUT_ADDON)
+        if control_failures:
             raise RuntimeError(
-                f"Unfiltered fixture control did not load all resources: {observed}"
+                f"Unfiltered fixture control failed: {control_failures}"
             )
         parameters = observe_parameters(browser, endpoint)
         if parameters != PARAMETERS_WITHOUT_ADDON:
@@ -390,12 +415,8 @@ def firefox_run(xpi, role, state, driver_binary, firefox_binary,
         result.pop("token", None)
         observed = observe_page(browser, endpoint, WITH_ADDON)
         result["browser_behavior"] = observed
-        if observed != WITH_ADDON:
-            differing = {
-                name: {"expected": expected, "actual": observed.get(name)}
-                for name, expected in WITH_ADDON.items()
-                if observed.get(name) != expected
-            }
+        differing = fixture_page_mismatches(observed, WITH_ADDON)
+        if differing:
             raise RuntimeError(f"Firefox behavior regression: {differing}")
         result["browser_parameters"] = observe_parameters(browser, endpoint)
         if result["browser_parameters"] != PARAMETERS_WITH_ADDON:
@@ -557,7 +578,13 @@ def compare(data, dataset, identical_build=False):
     browser_pages = [row.get("browser_behavior") for role in ROLES for row in data[role]]
     expected_page = WITH_ADDON
     behavior["browser_page_probe_ran"] = all(isinstance(page, dict) for page in browser_pages)
-    behavior["browser_page_match"] = all(page == expected_page for page in browser_pages)
+    page_failures = [
+        {"run": index + 1, **failure}
+        for index, page in enumerate(browser_pages)
+        for failure in fixture_page_mismatches(page, expected_page)
+    ]
+    behavior["browser_page_match"] = not page_failures
+    behavior["browser_page_mismatches_first_25"] = page_failures[:25]
     behavior["local_block_positive_control"] = behavior["browser_page_match"]
     url_parameters = [
         row.get("browser_parameters") for role in ROLES for row in data[role]
