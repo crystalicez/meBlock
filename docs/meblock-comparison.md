@@ -67,6 +67,10 @@ Those process-wide readings are secondary diagnostics, not reliable per-extensio
 
 The GitHub workflow `.github/workflows/meblock-regression.yml` automatically runs Python unit regression tests, JavaScript syntax validation and deterministic corpus generation on Windows. A separate **opt-in Firefox integration job** is available from GitHub Actions → **Run workflow** → enable `firefox_integration`. That job fetches the official upstream commit and filter assets, runs one real Firefox comparison per build with a fresh profile, and uploads JSON evidence. It is not the five-run performance gate; run the full command locally for statistical comparisons. This CI integration job must be verified on a hosted runner before its results can be claimed.
 
+## Extension memory attribution
+
+Use the `about:memory` export workflow in [meBlock memory measurements](meblock-memory.md) to measure the extension's actual reporter subtrees after filter readiness. `tools/meblock/analyze_memory.py` parses Firefox `.json.gz` files and compares equivalent reporter scopes without double-counting parent and child allocations. The optional process-wide RSS numbers here are **not** equivalent to those measurements.
+
 ## Safety and isolation
 
 - Source snapshots are created via `git archive` under ignored `dist/build/meblock-comparison`.
