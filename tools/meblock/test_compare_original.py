@@ -265,6 +265,41 @@ class CompareTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "20 measured loads"):
             runner.compare({"upstream": [source], "meblock": [target]}, DATASET)
 
+    def test_rule_derived_manifest_checks_integrity_and_only_returns_safe_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = Path(directory) / "rule-requests.json"
+            rows = [
+                {"frameUrl": "https://reader.example.invalid/page",
+                 "url": "https://alpha.example/probe.js", "cpt": "script"}
+                for _ in range(4)
+            ]
+            payload = (json.dumps(rows) + "\n").encode("utf-8")
+            dataset.write_bytes(payload)
+            manifest = {
+                "schema": "meblock-default-rule-probes-v1",
+                "shard_index": 0, "shard_count": 16,
+                "simple_host_rules_in_shard": 1, "simple_host_rule_unique": 16,
+                "positive_requests": 2, "near_miss_requests": 2,
+                "request_count": 4, "bundled_asset_count": 2,
+                "dataset_sha256": runner.hash_bytes(payload),
+                "bundled_asset_contents_sha256": "a" * 64,
+                "private_raw_filter": "must never be copied to results",
+            }
+            sidecar = dataset.with_suffix(".json.manifest.json")
+            sidecar.write_text(json.dumps(manifest), encoding="utf-8")
+            safe = runner.read_rule_derived_manifest(dataset, payload, rows, True)
+            self.assertEqual(safe["request_count"], 4)
+            self.assertEqual(safe["bundled_asset_contents_sha256"], "a" * 64)
+            self.assertNotIn("private_raw_filter", safe)
+            with self.assertRaisesRegex(ValueError, "require --default-lists"):
+                runner.read_rule_derived_manifest(dataset, payload, rows, False)
+            with self.assertRaisesRegex(ValueError, "differs"):
+                runner.read_rule_derived_manifest(dataset, payload + b"!", rows, True)
+            manifest["positive_requests"] = 3
+            sidecar.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "differs"):
+                runner.read_rule_derived_manifest(dataset, payload, rows, True)
+
     def test_default_lists_comparison_expects_unmodified_loopback_page(self):
         upstream, meblock = make_run(), make_run()
         for row in (upstream, meblock):

@@ -45,6 +45,46 @@ python tools/meblock/compare_original.py --runs 5 --idle-sample 5
 
 Those process-wide readings are secondary diagnostics, not reliable per-extension allocation or CPU metrics.
 
+## Request probes derived from bundled default-list rules
+
+The original smoke corpus targets a few repeated, known network URLs.
+For broader **differential correctness coverage** without changing any
+enabled filter lists, generate request records from the public filter-list
+text files **already packaged** in a pinned Firefox XPI:
+
+```powershell
+python tools/meblock/default_rule_probes.py --addon dist/build/uBlock0.firefox.xpi --shards 256 --shard-index 0
+python tools/meblock/compare_original.py --default-lists --dataset dist/build/default-rule-probes.json --runs 2
+```
+
+The generator only recognizes the simple `||hostname^` and
+`@@||hostname^` forms, optionally restricted to `script`, `image`
+or `xmlhttprequest`. Each distinct eligible rule produces **four
+request contexts**: matching host and near-miss host, each from a
+first-party and third-party document. All URLs are fed to uBO's static
+network matcher **without fetching those hostnames**. Neither tool injects
+a filter into the measured default-list builds in this mode.
+
+Deterministic, disjoint shards are indexed from zero. All rule candidates
+from the bundled files are assigned exactly once across the chosen shard
+count; each run checks every generated request decision and modifier mask
+against the pinned upstream engine. The generator fails when a selected
+shard would exceed its safe request cap. Run other `--shard-index`
+values separately to cover more candidates. The resulting dataset and
+numeric-only coverage manifest remain in **Git-ignored `dist/build/`**,
+and the comparison validates that manifest's request count and SHA-256.
+
+**What this does not prove:** A bundled file may include lists or lines
+not enabled at runtime, and a filter may be shadowed by an exception or
+another rule. The count of eligible candidates is therefore **not the
+count of enabled or individually proven rules**. Comparing two engines
+does not prove that a rule fired, or that their shared behavior follows
+filter syntax semantics. Unsupported network patterns, modifiers,
+procedural cosmetic filters, scriptlets, dynamic rules and interactions
+need separate targeted tests. The manifest exposes the exact eligible
+and excluded/duplicate counts; never report this as exhaustive coverage
+of all default-list rules or all possible contexts.
+
 ## Default-filter benchmark without injected test rules
 
 The current optimization baseline uses default enabled filter lists from

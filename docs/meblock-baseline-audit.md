@@ -25,6 +25,7 @@ No performance change is justified solely by that estimate.
 | Paired memory uncertainty and null controls | Verified in local tests and a real short Firefox null control | Reports paired delta range, median absolute deviation, deterministic bootstrap interval and exact two-sided sign-test p-value. Three pairs alone cannot justify a directional claim. Identical-XPI build mode is explicitly flagged as a negative control, even if the apparent difference is large. A directional process-wide signal requires at least six independent 300-second pairs and additional checks; it is never per-addon attribution |
 | Stock/default-lists RAM baseline | Verified short control and one 300-second same-XPI negative-control pair; repeat pairs pending | `memory_experiment.py --default-lists` pins the observed default compiled network count from the first clean Firefox profile and rejects count drift, with no synthetic rule addition. It checks bundled asset and selected list fingerprints, cosmetic counts and identical Firefox version across A/B. Pinned automatic list updates are disabled only in isolated profiles |
 | Reproducible steady-state A/B memory | **Not yet** | An exploratory online 5-minute pair showed 57.621 vs 72.851 MiB for the whole Extensions process, but filter readiness and stable counts were not validated then. Later strict tests detected filter-list changes during capture, including a 600,000-to-600,122 network-count drift after five minutes **despite offline mode**. The capture tool now additionally persists `autoUpdate=false` in each disposable profile and fails closed when rules change; it requires independently matched 5-minute AB/BA pairs before any RAM claim |
+| Default-list-derived network request coverage | Verified one reproducible shard in real Firefox; not exhaustive | A deterministic generator scans 8 public filter assets packaged in the default XPI and finds 93,326 distinct simple hostname-anchored candidates from 183,071 noncomment lines; candidates may be disabled, duplicated, or shadowed. A shard of 365 unique candidates created 1,460 first-/third-party positive and near-miss requests. Two alternating A/B pairs (4 Firefox profiles) passed per-request decisions and all modifier masks, with zero injected filters. 255 shards and non-simple filter types remain untested |
 | Individual default-list rule behavior | **Not exhaustively verified** | The running browser reports compiled totals and selected-list fingerprints, but neither proves that each default-list rule has correct behavior in every URL, request-type, frame, priority, exception or modifier context. Full exhaustive context combinations are not feasible; use per-rule differential cases and targeted rule-interaction regressions for the code being optimized |
 | Per-rule cosmetic/scriptlet browser behavior | Verified in disposable Firefox; still synthetic | Fixture v5 checks fixed-index boolean vectors for 96 cosmetic targets, all 96 corresponding near-miss nodes, 32 independent visible controls, each of 12 scriptlet targets and each of 12 untouched scriptlet near misses. Missing nodes and changed positions fail even if aggregate counts remain the same. A no-addon control checks inverse blocking outcomes; 2 alternating A/B pairs with byte-identical builds passed in Firefox |
 | Extra 600k synthetic rules | No longer required for baseline | The prior hostname-heavy and mixed-network synthetic experiments remain opt-in stress-test tools only; they are **not** part of current default-list RAM or performance acceptance. No private subscriptions are copied |
@@ -57,6 +58,19 @@ not exhaustive proof of correctness for a proposed optimization.
 
 ## Actual Firefox validation, 2026-10-19
 
+- An actual default-XPI bundled-rule probe on Firefox generated **1,460
+  requests** from 365 distinct simple host-anchored public filter
+  candidates in shard 0/256. Across **two A/B pairs in four Firefox
+  profiles**, each candidate received a matching and near-miss request
+  in first- and third-party document contexts. Per-request decisions and
+  modifier bitmasks were identical, all page checks passed, and the
+  four known engine buffers had a zero-byte delta. Test builds had
+  **zero injected filter rules** and byte-identical source. The result
+  was labeled CONTROL. This does not demonstrate that each rule fired,
+  cover all enabled lists, or prove any speedup. The generator reports
+  93,326 distinct eligible candidates across eight bundled public
+  assets, **not 93,326 individually verified active rules**; other
+  shards and all non-simple types remain untested.
 - A real **default-lists-only 300-second negative-control pair** ran
   to completion in two independently started Firefox 157 profiles with
   the same unchanged XPI, exactly 252,243 compiled network filters,

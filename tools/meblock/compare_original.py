@@ -27,6 +27,7 @@ from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from benchmark_firefox import collect_idle, geckodriver_path
 from comparison_stats import paired_performance, timing_verdict
+from default_rule_probes import bundled_asset_fingerprint
 from browser_fixtures import (
     FIXTURE_VERSION, OBSERVATION_SCRIPT, ROUTES, RULES, WITH_ADDON, WITHOUT_ADDON,
     PARAMETERS_WITH_ADDON, PARAMETERS_WITHOUT_ADDON,
@@ -722,6 +723,45 @@ def compare(data, dataset, identical_build=False, *, default_lists=False):
     }
 
 
+def read_rule_derived_manifest(dataset, payload, rows, default_lists):
+    sidecar = dataset.with_suffix(dataset.suffix + ".manifest.json")
+    if not sidecar.is_file():
+        return None
+    manifest = json.loads(sidecar.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict):
+        raise ValueError("Request probe manifest is not an object")
+    if manifest.get("schema") != "meblock-default-rule-probes-v1":
+        return None
+    if not default_lists:
+        raise ValueError("Rule-derived request probes require --default-lists")
+    numbers = (
+        "shard_index", "shard_count", "simple_host_rules_in_shard",
+        "positive_requests", "near_miss_requests", "request_count",
+        "simple_host_rule_unique", "bundled_asset_count",
+    )
+    if any(type(manifest.get(field)) is not int for field in numbers):
+        raise ValueError("Rule-derived coverage contains invalid counters")
+    if (
+        manifest["shard_count"] < 1
+        or not 0 <= manifest["shard_index"] < manifest["shard_count"]
+        or manifest["simple_host_rules_in_shard"] < 1
+        or manifest["simple_host_rule_unique"] < manifest["simple_host_rules_in_shard"]
+        or manifest["bundled_asset_count"] < 1
+        or manifest["positive_requests"] != 2 * manifest["simple_host_rules_in_shard"]
+        or manifest["near_miss_requests"] != 2 * manifest["simple_host_rules_in_shard"]
+        or manifest["request_count"] != len(rows)
+        or manifest["request_count"] != 4 * manifest["simple_host_rules_in_shard"]
+        or manifest.get("dataset_sha256") != hash_bytes(payload)
+    ):
+        raise ValueError("Rule-derived request manifest differs from dataset")
+    assets = manifest.get("bundled_asset_contents_sha256")
+    if not isinstance(assets, str) or re.fullmatch(r"[0-9a-f]{64}", assets) is None:
+        raise ValueError("Rule-derived asset digest is invalid")
+    return {key: manifest[key] for key in (
+        "schema", *numbers, "dataset_sha256", "bundled_asset_contents_sha256"
+    )}
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dataset", type=Path, default=BUILD_ROOT / "meblock-requests.json")
@@ -745,6 +785,9 @@ def main():
     dirty_paths = git("status", "--porcelain")
     raw = args.dataset.read_bytes()
     dataset = valid_rows(json.loads(raw))
+    derived_coverage = read_rule_derived_manifest(
+        args.dataset, raw, dataset, args.default_lists
+    )
     hashes = {role: git("rev-parse", ref) for role, ref in (
         ("upstream", args.upstream_ref), ("meblock", args.meblock_ref)
     )}
@@ -765,6 +808,7 @@ def main():
         "status": "incomplete", "session": str(session_dir),
         "refs": hashes, "assets": assets_hashes,
         "dataset_sha256": hash_bytes(raw), "dataset_count": len(dataset),
+        "rule_derived_probe_coverage": derived_coverage,
         "fixture_version": FIXTURE_VERSION,
         "harness_files_sha256": {
             name: hash_file(Path(__file__).with_name(name))
@@ -794,6 +838,9 @@ def main():
             checkout = session_dir / role / "checkout"
             export_git(hashes[role], checkout)
             built = run_build(checkout, assets)
+            if (derived_coverage is not None and bundled_asset_fingerprint(built) !=
+                derived_coverage["bundled_asset_contents_sha256"]):
+                raise ValueError("Built default filter assets differ from rule-probe source")
             snapshots[role] = source_files(built)
             xpi = session_dir / role / "instrumented.xpi"
             packages[role] = probe_package(
