@@ -66,6 +66,31 @@ Those process-wide readings are secondary diagnostics, not reliable per-extensio
 
 **Coverage limits:** These fixtures exercise selected network and page-side effects and the internal session firewall state. Browser-wide dynamic-firewall blocking, CNAME uncloaking, HTML filtering, filter subscriptions, persistence across a full Firefox process restart, large-page behavior, all redirect resources, advanced scriptlets and private memory attribution require separate tests. The settings check exercises persistence across **extension reload**, not process restart. The upstream cosmetic/scriptlet microbenchmarks still expose only aggregate timings. Synthetic datasets do not establish real-user speedups.
 
+## Deterministic page-side workload
+
+The disposable Firefox fixture version 4 adds **96 cosmetic rules**, split
+evenly between class selectors, ID selectors and attribute selectors. The
+page contains one target for each rule, plus **32 visible controls** which
+must stay visible. It also adds **12 set-constant scriptlets** with distinct
+properties that are checked individually through an aggregate count.
+
+The browser's observation script reports the exact numbers of hidden
+cosmetic targets, visible controls and applied scriptlet properties. The
+without-addon run must find **0 hidden, 32 visible, 0 scriptlets applied**;
+each instrumented build must find **96 hidden, 32 visible, 12 applied**.
+The same checks run on every navigation in the loopback page p95 test,
+not just during first load. A wrong count fails the comparison rather
+than contributing a misleading fast timing sample.
+
+This adds reproducible **page-side variety** to the browser regression
+suite. It is not a realistic 600,000-filter subscription distribution:
+the existing synthetic network corpus and these small deterministic DOM
+fixtures remain separate. It does not cover arbitrary procedural
+cosmetic selectors, advanced scriptlets, or normal user browsing.
+Compare navigation p95 values only with the **same fixture version** and
+pinned rule inputs; a change in fixture content invalidates comparisons
+with earlier p95 runs.
+
 ## Controlled Firefox page navigation p95
 
 The Firefox integration runner now measures a synthetic loopback page in

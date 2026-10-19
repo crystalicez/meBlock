@@ -6,7 +6,7 @@ filter rules and expected observations form one versioned behavior contract.
 
 from base64 import b64decode
 
-FIXTURE_VERSION = 3
+FIXTURE_VERSION = 4
 
 DYNAMIC_FIREWALL_EXPECTED = {
     "block": 1,
@@ -28,6 +28,29 @@ RULES = (
     "||127.0.0.1^*fixture-params$removeparam=utm_source",
     "127.0.0.1##.meblock-probe-hide",
 )
+
+EXTRA_COSMETIC_COUNT = 96
+EXTRA_VISIBLE_COUNT = 32
+EXTRA_SCRIPTLET_COUNT = 12
+
+
+def extra_selector(index):
+    suffix = f"{index:03}"
+    if index % 3 == 0:
+        return f".mb-extra-class-{suffix}"
+    if index % 3 == 1:
+        return f"#mb-extra-{suffix}"
+    return f'[data-mb-extra="{suffix}"]'
+
+
+RULES += tuple(
+    f"127.0.0.1##{extra_selector(index)}"
+    for index in range(EXTRA_COSMETIC_COUNT)
+) + tuple(
+    f"127.0.0.1##+js(set-constant, mbFixtureVar{index:03}, true)"
+    for index in range(EXTRA_SCRIPTLET_COUNT)
+)
+
 
 IMAGE_PNG = b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/FHkAAAAASUVORK5CYII="
@@ -54,6 +77,22 @@ fetch("/test-blocked.json").then(r => r.json()).then(r => { window.__meblock_xhr
 </body>
 </html>
 """
+
+PAGE = PAGE.replace(
+    '<div id="control-target">visible target</div>',
+    '<div id="control-target">visible target</div>' +
+    ''.join(
+        f'<div id="mb-extra-{index:03}" class="mb-extra-class-{index:03}" '
+        f'data-mb-extra="{index:03}">cosmetic probe</div>'
+        for index in range(EXTRA_COSMETIC_COUNT)
+    ) +
+    ''.join(
+        f'<div class="mb-extra-visible" data-mb-control="{index:03}">'
+        'visible probe</div>'
+        for index in range(EXTRA_VISIBLE_COUNT)
+    )
+)
+
 
 ROUTES = {
     "/fixture": ("text/html; charset=utf-8", PAGE.encode("utf-8")),
@@ -94,12 +133,12 @@ const frame = (id, token) => {
             element.contentDocument.body.textContent.includes(token));
     } catch { return false; }
 };
-const isHidden = id => {
-    const element = document.getElementById(id);
+const hidden = element => {
     if (!element) { return false; }
     const style = getComputedStyle(element);
     return style.display === 'none' || style.visibility === 'hidden';
 };
+const isHidden = id => hidden(document.getElementById(id));
 return {
     allowed_script: window.__meblock_allowed === true,
     blocked_script: window.__meblock_blocked === true,
@@ -113,6 +152,13 @@ return {
     xhr_allowed: window.__meblock_xhr_allowed === true,
     xhr_blocked: window.__meblock_xhr_blocked === true,
     scriptlet_applied: window.__meblock_scriptlet_set === true,
+    extra_cosmetic_hidden_count: Array.from(document.querySelectorAll('[data-mb-extra]'))
+        .filter(element => isHidden(element.id)).length,
+    extra_visible_count: Array.from(document.querySelectorAll('[data-mb-control]'))
+        .filter(element => !hidden(element)).length,
+    extra_scriptlets_applied_count: Array.from({ length: 12 }, (_, index) =>
+        window['mbFixtureVar' + String(index).padStart(3, '0')] === true
+    ).filter(Boolean).length,
     control_visible: !isHidden('control-target')
 };
 """
@@ -130,6 +176,9 @@ WITHOUT_ADDON = {
     "xhr_allowed": True,
     "xhr_blocked": True,
     "scriptlet_applied": False,
+    "extra_cosmetic_hidden_count": 0,
+    "extra_visible_count": EXTRA_VISIBLE_COUNT,
+    "extra_scriptlets_applied_count": 0,
     "control_visible": True,
 }
 
@@ -153,4 +202,6 @@ WITH_ADDON = {
     "cosmetic_hidden": True,
     "xhr_blocked": False,
     "scriptlet_applied": True,
+    "extra_cosmetic_hidden_count": EXTRA_COSMETIC_COUNT,
+    "extra_scriptlets_applied_count": EXTRA_SCRIPTLET_COUNT,
 }

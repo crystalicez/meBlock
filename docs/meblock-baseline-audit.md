@@ -21,6 +21,7 @@ measurement**. No performance change is justified solely by that estimate.
 | Memory process measurement | Verified, but **process-wide** | `analyze_memory.py` validates unit=bytes, reads raw Firefox JSON.gz, sums leaf reporters without parent+child duplication and rejects incomplete scopes. Extensions-process `explicit` is **not** the extension's private retained memory |
 | Paired memory uncertainty and null controls | Verified in local tests and a real short Firefox null control | Reports paired delta range, median absolute deviation, deterministic bootstrap interval and exact two-sided sign-test p-value. Three pairs alone cannot justify a directional claim. Identical-XPI build mode is explicitly flagged as a negative control, even if the apparent difference is large. A directional process-wide signal requires at least six independent 300-second pairs and additional checks; it is never per-addon attribution |
 | Reproducible steady-state A/B memory | **Not yet** | An exploratory online 5-minute pair showed 57.621 vs 72.851 MiB for the whole Extensions process, but filter readiness and stable counts were not validated then. Later strict tests detected filter-list changes during capture, including a 600,000-to-600,122 network-count drift after five minutes **despite offline mode**. The capture tool now additionally persists `autoUpdate=false` in each disposable profile and fails closed when rules change; it requires independently matched 5-minute AB/BA pairs before any RAM claim |
+| Deterministic cosmetic/scriptlet browser workload | Verified on disposable Firefox fixtures; still synthetic | Fixture v4 adds 96 cosmetic selectors (class, ID, attribute), 12 set-constant scriptlets and 32 always-visible DOM controls. A without-addon control expects 0 hidden / 32 visible / 0 applied, while both extension builds must report 96 / 32 / 12 on each page navigation. This tests page-side filtering effects, not realistic subscription proportions |
 | 600k production-like filter composition | **Partially exercised, not representative** | The original 600k fixture uses hostname rules. The optional deterministic `mixed-network` fixture adds hostname, path, script, image/third-party and regex filters to test different network parser shapes. It does **not** represent the actual user's cosmetic, scriptlet or network-rule proportions; no personal subscriptions are copied |
 | Controlled page navigation p95 | Verified on a local synthetic fixture; not representative | Browser-side `PerformanceNavigationTiming` measures 20 fixture page navigations after two warm-ups per isolated profile and checks behavior on every visit. A four-profile same-build control passed, with observed per-run p95 from 61 to 81 ms, a noise signal and **not** a speedup. No public website or full browsing distribution |
 | Request latency confidence | **Not yet** | Matcher benchmark reports session means and paired uncertainty; loopback page p95 exists but no representative **request-level p95** or rigorous production-like page-load performance. Claiming "no slowdown" requires this |
@@ -29,6 +30,17 @@ measurement**. No performance change is justified solely by that estimate.
 
 ## Actual Firefox validation, 2026-10-19
 
+- Fixture v4 was exercised in **three alternating upstream/fork Firefox A/B
+  pairs** (six isolated profiles; identical compiled source). Each browser
+  reported exactly **96 hidden cosmetic targets, 32 visible controls and
+  12 applied set-constant scriptlets**. The no-addon negative control
+  matched the opposite behavior. All network decision/modifier vectors
+  and the loopback page behavior checks passed. Each profile also performed
+  20 measured navigations after two warm-ups; per-profile loopback
+  `loadEventEnd` p95 values ranged **66 to 108 ms** across the six
+  sessions. This range demonstrates noise, **not a difference between builds**
+  or a real-website speedup. The fixture does not represent 600k public
+  filter-list proportions.
 - After adding the readiness and fingerprint gates, an offline five-minute
   **stock** capture completed with 252,243 network filters, 44,192 cosmetic
   filters and **54.953 MiB** Extensions-process `explicit` memory.

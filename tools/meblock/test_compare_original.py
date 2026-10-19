@@ -17,6 +17,8 @@ from browser_fixtures import (
     ROUTES, RULES, WITH_ADDON, WITHOUT_ADDON,
     PARAMETERS_WITH_ADDON, PARAMETERS_WITHOUT_ADDON,
     DYNAMIC_FIREWALL_EXPECTED, STATE_PERSISTENCE_KEY,
+    EXTRA_COSMETIC_COUNT, EXTRA_VISIBLE_COUNT, EXTRA_SCRIPTLET_COUNT,
+    FIXTURE_VERSION, PAGE,
 )
 
 
@@ -89,6 +91,25 @@ def buffer_sample(size=1024):
 
 
 class CompareTests(unittest.TestCase):
+    def test_page_side_fixture_is_deterministic_and_has_three_selector_shapes(self):
+        self.assertEqual(FIXTURE_VERSION, 4)
+        self.assertEqual(EXTRA_COSMETIC_COUNT, 96)
+        self.assertEqual(EXTRA_VISIBLE_COUNT, 32)
+        self.assertEqual(EXTRA_SCRIPTLET_COUNT, 12)
+        self.assertEqual(len(RULES), 8 + 96 + 12)
+        self.assertIn("127.0.0.1##.mb-extra-class-000", RULES)
+        self.assertIn("127.0.0.1###mb-extra-001", RULES)
+        self.assertIn('127.0.0.1##[data-mb-extra="002"]', RULES)
+        self.assertIn("127.0.0.1##+js(set-constant, mbFixtureVar011, true)", RULES)
+        self.assertEqual(PAGE.count("cosmetic probe</div>"), 96)
+        self.assertEqual(PAGE.count("visible probe</div>"), 32)
+        self.assertEqual(WITH_ADDON["extra_cosmetic_hidden_count"], 96)
+        self.assertEqual(WITH_ADDON["extra_visible_count"], 32)
+        self.assertEqual(WITH_ADDON["extra_scriptlets_applied_count"], 12)
+        self.assertEqual(WITHOUT_ADDON["extra_cosmetic_hidden_count"], 0)
+        self.assertEqual(WITHOUT_ADDON["extra_visible_count"], 32)
+        self.assertEqual(WITHOUT_ADDON["extra_scriptlets_applied_count"], 0)
+
     def test_navigation_p95_samples_firefox_timing_and_checks_each_page(self):
         class FixtureBrowser:
             def __init__(self):
@@ -320,7 +341,7 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(WITH_ADDON["blocked_image"], False)
         self.assertEqual(WITH_ADDON["blocked_frame"], False)
         self.assertTrue(WITH_ADDON["cosmetic_hidden"])
-        self.assertEqual(len(RULES), 8)
+        self.assertEqual(len(RULES), 8 + EXTRA_COSMETIC_COUNT + EXTRA_SCRIPTLET_COUNT)
         self.assertTrue(PARAMETERS_WITHOUT_ADDON["tracking_parameter_present"])
         self.assertFalse(PARAMETERS_WITH_ADDON["tracking_parameter_present"])
         self.assertFalse(WITH_ADDON["xhr_blocked"])
@@ -335,6 +356,9 @@ class CompareTests(unittest.TestCase):
             ("cosmetic_hidden", False),
             ("xhr_blocked", True),
             ("scriptlet_applied", False),
+            ("extra_cosmetic_hidden_count", 95),
+            ("extra_visible_count", 31),
+            ("extra_scriptlets_applied_count", 11),
         ):
             with self.subTest(field=field):
                 data = {
