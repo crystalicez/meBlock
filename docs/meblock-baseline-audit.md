@@ -3,8 +3,11 @@
 **Status: PARTIALLY VERIFIED, NOT YET AN OPTIMIZATION ACCEPTANCE BASELINE.**
 
 This audit separates a working test instrument from a repeatable performance
-baseline. The user's approximate 60 MB observation is **not an exact or pinned
-measurement**. No performance change is justified solely by that estimate.
+baseline. The chosen baseline is now the **default enabled lists** in a clean,
+uninstrumented upstream uBlock Origin or meBlock profile, with **no added
+synthetic filter rules**. The user's older approximate 60 MB observation
+under a different workload is not an exact or pinned measurement.
+No performance change is justified solely by that estimate.
 
 ## Coverage and evidence
 
@@ -20,16 +23,68 @@ measurement**. No performance change is justified solely by that estimate.
 | Fast engine-owned buffer footprint | Verified for one pinned public fixture in real Firefox | A test-only read-only probe measures `filter_data` plus three trie backing buffers and WASM flags, with numeric schema and repeated-run stability checks. After disabling automatic filter updates **only in disposable test builds**, three independent Firefox sessions per identical build all reported 17.5 MiB of the four known buffers at 252,250 compiled network filters; the same-build delta was zero. These counters omit JS objects, other filter engines and native overhead; they are **not total extension RAM** |
 | Memory process measurement | Verified, but **process-wide** | `analyze_memory.py` validates unit=bytes, reads raw Firefox JSON.gz, sums leaf reporters without parent+child duplication and rejects incomplete scopes. Extensions-process `explicit` is **not** the extension's private retained memory |
 | Paired memory uncertainty and null controls | Verified in local tests and a real short Firefox null control | Reports paired delta range, median absolute deviation, deterministic bootstrap interval and exact two-sided sign-test p-value. Three pairs alone cannot justify a directional claim. Identical-XPI build mode is explicitly flagged as a negative control, even if the apparent difference is large. A directional process-wide signal requires at least six independent 300-second pairs and additional checks; it is never per-addon attribution |
+| Stock/default-lists RAM baseline | Verified short control and one 300-second same-XPI negative-control pair; repeat pairs pending | `memory_experiment.py --default-lists` pins the observed default compiled network count from the first clean Firefox profile and rejects count drift, with no synthetic rule addition. It checks bundled asset and selected list fingerprints, cosmetic counts and identical Firefox version across A/B. Pinned automatic list updates are disabled only in isolated profiles |
 | Reproducible steady-state A/B memory | **Not yet** | An exploratory online 5-minute pair showed 57.621 vs 72.851 MiB for the whole Extensions process, but filter readiness and stable counts were not validated then. Later strict tests detected filter-list changes during capture, including a 600,000-to-600,122 network-count drift after five minutes **despite offline mode**. The capture tool now additionally persists `autoUpdate=false` in each disposable profile and fails closed when rules change; it requires independently matched 5-minute AB/BA pairs before any RAM claim |
+| Individual default-list rule behavior | **Not exhaustively verified** | The running browser reports compiled totals and selected-list fingerprints, but neither proves that each default-list rule has correct behavior in every URL, request-type, frame, priority, exception or modifier context. Full exhaustive context combinations are not feasible; use per-rule differential cases and targeted rule-interaction regressions for the code being optimized |
 | Per-rule cosmetic/scriptlet browser behavior | Verified in disposable Firefox; still synthetic | Fixture v5 checks fixed-index boolean vectors for 96 cosmetic targets, all 96 corresponding near-miss nodes, 32 independent visible controls, each of 12 scriptlet targets and each of 12 untouched scriptlet near misses. Missing nodes and changed positions fail even if aggregate counts remain the same. A no-addon control checks inverse blocking outcomes; 2 alternating A/B pairs with byte-identical builds passed in Firefox |
-| 600k production-like filter composition | **Partially exercised, not representative** | The original 600k fixture uses hostname rules. The optional deterministic `mixed-network` fixture adds hostname, path, script, image/third-party and regex filters to test different network parser shapes. It does **not** represent the actual user's cosmetic, scriptlet or network-rule proportions; no personal subscriptions are copied |
+| Extra 600k synthetic rules | No longer required for baseline | The prior hostname-heavy and mixed-network synthetic experiments remain opt-in stress-test tools only; they are **not** part of current default-list RAM or performance acceptance. No private subscriptions are copied |
 | Controlled page navigation p95 | Verified on a local synthetic fixture; not representative | Browser-side `PerformanceNavigationTiming` measures 20 fixture page navigations after two warm-ups per isolated profile and checks behavior on every visit. A four-profile same-build control passed, with observed per-run p95 from 61 to 81 ms, a noise signal and **not** a speedup. No public website or full browsing distribution |
 | Request latency confidence | **Not yet** | Matcher benchmark reports session means and paired uncertainty; loopback page p95 exists but no representative **request-level p95** or rigorous production-like page-load performance. Claiming "no slowdown" requires this |
 | WASM vs JS/native retained allocations | **Not yet** | Process `explicit` aggregates unrelated runtime allocations. Without validated heap/WASM attribution it is unsafe to decide which representation to optimize |
 | CI and public privacy | Verified for unit tests and local guard | The Windows regression workflow runs **only on manual dispatch**, not push or pull requests. It checks unit tests, Node syntax and privacy guard. Raw `about:memory` and regression JSON artifacts are never uploaded. Force-adding any file under `dist/build/` is rejected by the guard. The **optional** full Firefox integration job has not been proven on GitHub's hosted runner |
 
+## Behavioral gate before changing a filtering hot path
+
+A compiled rule count is not a behavioral proof. The default lists include
+network rules, exceptions, cosmetic selectors and scriptlets with
+context-dependent effects. The browser fixture's strict per-index tests
+only cover **its own intentionally injected rules**, not every default
+list entry.
+
+Before changing an engine path, create deterministic positive and
+non-matching contexts for affected default-list rules **where a distinct
+effect can be observed**. Compare network decisions and modifier results
+against the pinned upstream engine per context, exercise precedence and
+exception interactions, and assert page-side results for cosmetic and
+scriptlet rule types. The coverage report must count the rules tested,
+rules without a constructible decisive context and rule types not yet
+covered, rather than announcing universal coverage from matching totals.
+It is not feasible to exhaust all URLs, document origins, request types,
+page structures and combinations for every rule. The per-default-rule
+coverage report and the remaining interaction regressions are **not yet
+implemented**; until then, the default-list test is a screening baseline,
+not exhaustive proof of correctness for a proposed optimization.
+
 ## Actual Firefox validation, 2026-10-19
 
+- A real **default-lists-only 300-second negative-control pair** ran
+  to completion in two independently started Firefox 157 profiles with
+  the same unchanged XPI, exactly 252,243 compiled network filters,
+  44,192 cosmetic filters, ten enabled default lists, and **zero**
+  injected rules. Both profiles settled for 300 seconds after filter
+  readiness, with identical list and bundled-asset fingerprints. The
+  whole Extensions-process `explicit` values were **54.923 MiB** and
+  **54.860 MiB**, an apparent difference of **-0.063 MiB
+  (-0.115%)**. This is a **single same-XPI noise control**, not a fork
+  comparison or proof of RAM improvement. Verdict remains EXPLORATORY
+  because at least three independent steady-state pairs and a longer
+  noise assessment are still missing.
+- In the updated **stock/default-enabled-lists-only** mode, a real
+  two-pair A/B same-XPI Firefox control loaded **252,243 network and
+  44,192 cosmetic filters**, adding **zero synthetic rules**. The
+  pairs had only a two-second post-readiness settling period. The
+  whole Extensions-process RAM paired differences were **-0.391 MiB
+  and -8.511 MiB**; verdict EXPLORATORY, IDENTICAL-XPI NEGATIVE CONTROL.
+  These values reveal environmental noise, **not RAM improvement**.
+- A separate real Firefox **default-list** network-matcher comparison
+  ran two alternating A/B pairs with byte-identical builds and no
+  appended fixture filter rules. All 3,000 synthetic request decisions
+  per run and modifier masks matched exactly, with **zero bytes**
+  difference in the selected four known engine buffers. Observed
+  average matcher costs were 15.07–22.33 µs/request (upstream runs)
+  and 14.80–17.07 µs/request (fork runs). The verdict remained CONTROL
+  and is not a speedup claim. This mode keeps disposable probes but
+  uses default filter lists; its request traffic remains synthetic.
 - Fixture v5 completed **two alternating A/B pairs across four disposable
   Firefox profiles** with byte-identical upstream/fork code. Every actual
   profile returned complete all-true vectors for 96 cosmetic target

@@ -45,6 +45,33 @@ python tools/meblock/compare_original.py --runs 5 --idle-sample 5
 
 Those process-wide readings are secondary diagnostics, not reliable per-extension allocation or CPU metrics.
 
+## Default-filter benchmark without injected test rules
+
+The current optimization baseline uses default enabled filter lists from
+the pinned upstream and meBlock builds, with no added test filters:
+
+```powershell
+python tools/meblock/compare_original.py --default-lists --dataset dist/build/meblock-requests-coverage.json --runs 5
+```
+
+`--default-lists` leaves the built-in filter file untouched by the
+regression fixture. Both test builds still receive **identical disposable
+measurement probes** and have automatic filter updates disabled to keep
+the comparison pinned; they are not release XPIs suitable for total-RAM
+measurement. The request dataset is synthetic traffic, but the matching
+engine uses the actual default enabled lists. It checks each dataset
+request's decision and modifier mask against upstream, **not the
+behavior of every enabled filter rule under every possible context**.
+The loopback page should behave like the without-addon control because
+the additional fixture-specific rules were not installed. Therefore this
+mode does not claim to check the independent positive blocking fixture.
+
+For exhaustive checks of the small controlled cosmetic/scriptlet fixture,
+run the comparison **without** `--default-lists`. That mode injects test
+filters and is for correctness testing, not the stock-filter baseline.
+For retained RAM use **uninstrumented** XPIs with
+`memory_experiment.py --default-lists` instead.
+
 ## What is checked
 
 | Gate | Check | Interpretation |

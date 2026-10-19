@@ -1,6 +1,6 @@
 """Paired memory comparison must reject mismatched inputs and report exact deltas."""
 
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 import json
 from pathlib import Path
@@ -126,6 +126,81 @@ class PairedMemoryTests(unittest.TestCase):
             saved = json.loads(next(Path(directory).glob("paired-memory-*.json")).read_text())
             self.assertEqual(saved["conditions"],
                              "identical XPI in both positions; same-build negative control")
+
+    def test_default_lists_auto_pin_first_real_network_count_and_never_inject(self):
+        calls = []
+        def fake_capture(*_args, **kwargs):
+            calls.append(dict(kwargs))
+            result = sample("stock", 56 if len(calls) % 2 else 58,
+                            source="sha-fork" if _args[0] == Path("fork.xpi")
+                            else "sha-stock")
+            result["filter_engine"]["network_filters"] = 252243
+            return result
+
+        with tempfile.TemporaryDirectory() as directory:
+            with (patch("memory_experiment.PRIVATE_DIR", Path(directory)),
+                  patch("memory_experiment.capture", side_effect=fake_capture),
+                  redirect_stdout(StringIO())):
+                outcome = main([
+                    "--addon", "stock.xpi", "--candidate-addon", "fork.xpi",
+                    "--default-lists", "--pairs", "2", "--settle-seconds", "2",
+                ])
+            self.assertEqual(outcome, 0)
+            report = json.loads(next(Path(directory).glob("paired-memory-*.json")).read_text())
+        self.assertEqual([call["extra_rules"] for call in calls], [0, 0, 0, 0])
+        self.assertEqual(
+            [call["expected_network_filters"] for call in calls],
+            [None, 252243, 252243, 252243],
+        )
+        self.assertTrue(all(call["offline"] is True for call in calls))
+        self.assertEqual(report["workload"], "default-enabled-filter-lists")
+        self.assertEqual(report["base_network_filters"], 252243)
+        self.assertEqual(report["extra_synthetic_rules"], 0)
+        self.assertEqual(report["synthetic_rule_mix"], "none")
+        self.assertEqual(
+            report["conditions"],
+            "original XPI vs candidate XPI using default enabled filter lists",
+        )
+
+    def test_default_lists_forbid_injected_rules_manual_count_or_missing_candidate(self):
+        for extra in (
+            [],
+            ["--candidate-addon", "fork.xpi", "--extra-synthetic-rules", "4"],
+            ["--candidate-addon", "fork.xpi", "--base-network-filters", "252243"],
+        ):
+            with self.subTest(extra=extra):
+                with redirect_stderr(StringIO()):
+                    with self.assertRaises(SystemExit) as caught:
+                        main(["--default-lists", "--pairs", "1", *extra])
+                self.assertEqual(caught.exception.code, 2)
+
+    def test_default_lists_reject_filter_count_drift_before_accepting_pair(self):
+        values = [252243, 252244]
+        def fake_capture(*_args, **kwargs):
+            result = sample("stock", 60)
+            result["filter_engine"]["network_filters"] = values.pop(0)
+            return result
+        with tempfile.TemporaryDirectory() as directory:
+            with (patch("memory_experiment.PRIVATE_DIR", Path(directory)),
+                  patch("memory_experiment.capture", side_effect=fake_capture),
+                  redirect_stdout(StringIO()) as output):
+                outcome = main([
+                    "--default-lists", "--candidate-addon", "fork.xpi",
+                    "--pairs", "1", "--settle-seconds", "2",
+                ])
+            self.assertEqual(outcome, 1)
+            self.assertIn("filter count drifted", output.getvalue())
+            self.assertEqual(list(Path(directory).glob("paired-memory-*.json")), [])
+
+    def test_network_count_drift_across_build_pairs_is_rejected(self):
+        rows = []
+        for pair, count in ((0, 252243), (1, 252244)):
+            for role in ("stock", "synthetic"):
+                result = sample(role, 62 if role == "stock" else 65)
+                result["filter_engine"]["network_filters"] = count
+                rows.append((pair, role, result))
+        with self.assertRaisesRegex(ValueError, "across pairs"):
+            summarize_pairs(rows, mode="build")
 
     def test_noisy_pairs_report_spread_and_no_directional_signal(self):
         readings = ((50.0, 60.0), (60.0, 50.0), (55.0, 55.0),

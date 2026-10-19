@@ -110,7 +110,8 @@ def run_build(source, assets):
     return output
 
 
-def probe_package(build, destination, role, endpoint, token, dataset_bytes):
+def probe_package(build, destination, role, endpoint, token, dataset_bytes,
+                  *, include_fixture_rules=True):
     network_engine = build / "js" / "static-net-filtering.js"
     original_engine = network_engine.read_text(encoding="utf-8")
     if "meblockEngineBufferFootprint" in original_engine:
@@ -129,8 +130,9 @@ def probe_package(build, destination, role, endpoint, token, dataset_bytes):
     core_filters = build / "assets" / "ublock" / "filters.min.txt"
     if not core_filters.is_file():
         raise RuntimeError("Built-in filter list missing for browser behavior fixture")
-    with core_filters.open("a", encoding="utf-8") as stream:
-        stream.write("\n" + "\n".join(RULES) + "\n")
+    if include_fixture_rules:
+        with core_filters.open("a", encoding="utf-8") as stream:
+            stream.write("\n" + "\n".join(RULES) + "\n")
     text = PROBE_PATH.read_text(encoding="utf-8")
     if "__MEBLOCK_CONFIG__" not in text:
         raise RuntimeError("Probe configuration placeholder not found")
@@ -387,7 +389,8 @@ def test_without_addon(endpoint, driver_binary, firefox_binary):
 
 
 def firefox_run(xpi, role, state, driver_binary, firefox_binary,
-                timeout, idle_sample, endpoint, expected_addon_id):
+                timeout, idle_sample, endpoint, expected_addon_id,
+                *, default_lists=False):
     options = Options()
     options.binary_location = str(firefox_binary)
     options.add_argument("-headless")
@@ -413,18 +416,22 @@ def firefox_run(xpi, role, state, driver_binary, firefox_binary,
         result["addon_id_verified"] = True
         result["firefox_version"] = browser.capabilities.get("browserVersion")
         result.pop("token", None)
-        observed = observe_page(browser, endpoint, WITH_ADDON)
+        expected_page = WITHOUT_ADDON if default_lists else WITH_ADDON
+        expected_parameters = (
+            PARAMETERS_WITHOUT_ADDON if default_lists else PARAMETERS_WITH_ADDON
+        )
+        observed = observe_page(browser, endpoint, expected_page)
         result["browser_behavior"] = observed
-        differing = fixture_page_mismatches(observed, WITH_ADDON)
+        differing = fixture_page_mismatches(observed, expected_page)
         if differing:
             raise RuntimeError(f"Firefox behavior regression: {differing}")
         result["browser_parameters"] = observe_parameters(browser, endpoint)
-        if result["browser_parameters"] != PARAMETERS_WITH_ADDON:
+        if result["browser_parameters"] != expected_parameters:
             raise RuntimeError(
                 f"Firefox URL-modification regression: {result['browser_parameters']}"
             )
         result["fixture_navigation"] = measure_fixture_navigation(
-            browser, endpoint, WITH_ADDON
+            browser, endpoint, expected_page
         )
         if idle_sample:
             result["idle_process_sample"] = collect_idle(
@@ -530,7 +537,7 @@ def summarize_engine_buffers(series):
     return readings[0]
 
 
-def compare(data, dataset, identical_build=False):
+def compare(data, dataset, identical_build=False, *, default_lists=False):
     a, b = data["upstream"], data["meblock"]
     behavior = check_behavior(a, b, dataset)
     aggregate_signatures = []
@@ -576,7 +583,10 @@ def compare(data, dataset, identical_build=False):
     )
     behavior["reference_aggregate_counts"] = aggregate_signatures[0]
     browser_pages = [row.get("browser_behavior") for role in ROLES for row in data[role]]
-    expected_page = WITH_ADDON
+    expected_page = WITHOUT_ADDON if default_lists else WITH_ADDON
+    expected_parameters = (
+        PARAMETERS_WITHOUT_ADDON if default_lists else PARAMETERS_WITH_ADDON
+    )
     behavior["browser_page_probe_ran"] = all(isinstance(page, dict) for page in browser_pages)
     page_failures = [
         {"run": index + 1, **failure}
@@ -585,12 +595,14 @@ def compare(data, dataset, identical_build=False):
     ]
     behavior["browser_page_match"] = not page_failures
     behavior["browser_page_mismatches_first_25"] = page_failures[:25]
-    behavior["local_block_positive_control"] = behavior["browser_page_match"]
+    behavior["local_block_positive_control"] = (
+        None if default_lists else behavior["browser_page_match"]
+    )
     url_parameters = [
         row.get("browser_parameters") for role in ROLES for row in data[role]
     ]
     behavior["url_modifier_match"] = all(
-        parameters == PARAMETERS_WITH_ADDON for parameters in url_parameters
+        parameters == expected_parameters for parameters in url_parameters
     )
     dynamic_checks = [
         row.get("dynamic_firewall") for role in ROLES for row in data[role]
@@ -687,6 +699,8 @@ def compare(data, dataset, identical_build=False):
         "verdict": verdict,
         "correctness": behavior,
         "builds_identical": identical_build,
+        "default_enabled_lists_only": default_lists,
+        "injected_filter_rules": 0 if default_lists else len(RULES),
         "paired_performance": paired,
         "fixture_navigation": fixture_navigation,
         "engine_buffer_footprint": engine_buffers,
@@ -718,6 +732,10 @@ def main():
     p.add_argument("--meblock-ref", default="HEAD")
     p.add_argument("--firefox", type=Path, default=Path(r"C:\Program Files\Mozilla Firefox\firefox.exe"))
     p.add_argument("--build-only", action="store_true")
+    p.add_argument(
+        "--default-lists", action="store_true",
+        help="Benchmark installed default lists only; do not inject test filter rules",
+    )
     p.add_argument("--output-root", type=Path, default=BUILD_ROOT / "meblock-comparison")
     args = p.parse_args()
     if args.runs < 1 or args.timeout < 5 or args.idle_sample < 0:
@@ -757,6 +775,8 @@ def main():
             )
         },
         "runs_per_build": args.runs, "steps": [], "test_only_probe": True,
+        "default_enabled_lists_only": args.default_lists,
+        "injected_filter_rules": 0 if args.default_lists else len(RULES),
         "working_tree_dirty": bool(dirty_paths),
         "note": "Both source snapshots are exported from resolved commits, not the working tree.",
     }
@@ -776,7 +796,10 @@ def main():
             built = run_build(checkout, assets)
             snapshots[role] = source_files(built)
             xpi = session_dir / role / "instrumented.xpi"
-            packages[role] = probe_package(built, xpi, role, endpoint, state.token, raw)
+            packages[role] = probe_package(
+                built, xpi, role, endpoint, state.token, raw,
+                include_fixture_rules=not args.default_lists,
+            )
             builds[role] = xpi
             metadata["steps"].append(f"{role} built and test probe injected")
         metadata["build_delta"] = source_delta(snapshots["upstream"], snapshots["meblock"])
@@ -797,6 +820,7 @@ def main():
                     builds[role], role, state, driver_path,
                     args.firefox, args.timeout, args.idle_sample, endpoint,
                     packages[role]["addon_id"],
+                    default_lists=args.default_lists,
                 )
                 data[role].append(result)
                 print(json.dumps({
@@ -807,7 +831,8 @@ def main():
                     json.dumps(result, indent=2) + "\n", encoding="utf-8"
                 )
         metadata["comparison"] = compare(
-            data, dataset, identical_build=metadata["build_delta"]["files_different"] == 0
+            data, dataset, identical_build=metadata["build_delta"]["files_different"] == 0,
+            default_lists=args.default_lists,
         )
         metadata["status"] = ("failed" if metadata["comparison"]["verdict"].startswith("FAIL")
                               else "complete")

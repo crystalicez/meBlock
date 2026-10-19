@@ -265,6 +265,33 @@ class CompareTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "20 measured loads"):
             runner.compare({"upstream": [source], "meblock": [target]}, DATASET)
 
+    def test_default_lists_comparison_expects_unmodified_loopback_page(self):
+        upstream, meblock = make_run(), make_run()
+        for row in (upstream, meblock):
+            row["browser_behavior"] = deepcopy(WITHOUT_ADDON)
+            row["browser_parameters"] = dict(PARAMETERS_WITHOUT_ADDON)
+        result = runner.compare(
+            {"upstream": [upstream], "meblock": [meblock]},
+            DATASET, identical_build=True, default_lists=True,
+        )
+        self.assertEqual(result["verdict"],
+                         "CONTROL: byte-identical builds; timing differences are environmental")
+        self.assertTrue(result["default_enabled_lists_only"])
+        self.assertEqual(result["injected_filter_rules"], 0)
+        self.assertTrue(result["correctness"]["browser_page_match"])
+        self.assertTrue(result["correctness"]["url_modifier_match"])
+        self.assertIsNone(result["correctness"]["local_block_positive_control"])
+        meblock["browser_behavior"]["extra_cosmetic_hidden_by_index"][0] = True
+        broken = runner.compare(
+            {"upstream": [upstream], "meblock": [meblock]},
+            DATASET, default_lists=True,
+        )
+        self.assertEqual(broken["verdict"], "FAIL: behavioral regression")
+        self.assertEqual(
+            broken["correctness"]["browser_page_mismatches_first_25"][0]["indices_first_25"],
+            [0],
+        )
+
     def test_engine_buffers_report_exact_known_byte_difference(self):
         upstream, meblock = make_run(), make_run()
         upstream["engine_buffer_footprint"] = buffer_sample(1024)
@@ -493,6 +520,42 @@ class CompareTests(unittest.TestCase):
 
 
 class PackageTests(unittest.TestCase):
+    def test_default_lists_package_never_appends_fixture_rules(self):
+        with tempfile.TemporaryDirectory() as directory:
+            build = Path(directory) / "build"
+            (build / "assets" / "ublock").mkdir(parents=True)
+            (build / "js").mkdir()
+            (build / "manifest.json").write_text(
+                json.dumps({"browser_specific_settings": {
+                    "gecko": {"id": "default-fixture@example.invalid"}
+                }}), encoding="utf-8",
+            )
+            (build / "background.html").write_text(
+                "<html><body></body></html>", encoding="utf-8",
+            )
+            (build / "js" / "static-net-filtering.js").write_text(
+                "export default {};", encoding="utf-8",
+            )
+            (build / "js" / "background.js").write_text(
+                "const defaults = {\n    autoUpdate: true,\n};", encoding="utf-8",
+            )
+            asset = build / "assets" / "ublock" / "filters.min.txt"
+            original = b"! bundled stock filters\n||public.example.invalid^\n"
+            asset.write_bytes(original)
+            output = Path(directory) / "default-probed.xpi"
+            runner.probe_package(
+                build, output, "meblock", "http://127.0.0.1:8888",
+                "test-token", b"[]", include_fixture_rules=False,
+            )
+            self.assertEqual(asset.read_bytes(), original)
+            with ZipFile(output) as archive:
+                self.assertEqual(archive.read("assets/ublock/filters.min.txt"), original)
+                self.assertIn(
+                    b"meblockEngineBufferFootprint",
+                    archive.read("js/static-net-filtering.js"),
+                )
+                self.assertIn(b"autoUpdate: false", archive.read("js/background.js"))
+
     def test_instrumented_package_tracks_fork_identity(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder) / "build"

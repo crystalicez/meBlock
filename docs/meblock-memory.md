@@ -6,6 +6,39 @@ of one extension. The reported **about 60 MB** for roughly **600,000 filters**
 is a user-observed starting point, **not yet a reproducible baseline** or a
 verified attribution to a filtering engine component.
 
+## Default enabled lists are the optimization baseline
+
+The performance and RAM baseline uses the **default enabled filter lists**
+from a freshly installed, uninstrumented uBlock Origin or meBlock XPI.
+Do **not** add 600,000 synthetic rules or any extra benchmark filters.
+The default list selection and its bundled public filter sources must match
+across both XPI conditions. Keep Firefox offline and automatic list updates
+disabled **only in isolated measurement profiles** to pin the workload.
+
+For the direct upstream/meBlock A/B baseline, build both uninstrumented
+XPIs from pinned revisions with the same bundled public filter assets:
+
+```powershell
+python tools/meblock/memory_experiment.py --addon dist/build/upstream-test.xpi --candidate-addon dist/build/meblock-test.xpi --default-lists --pairs 3 --settle-seconds 300
+```
+
+Both XPI paths are placeholders for locally built files. The
+`--default-lists` mode adds **zero** filter rules and reads the
+actual compiled network count from the first Firefox profile, then
+requires exactly that count in every later profile. It also validates
+matching cosmetic count, selected-list fingerprint and bundled filter
+asset fingerprint. Do not supply `--base-network-filters`,
+`--extra-synthetic-rules` or other synthetic additions in this mode.
+With the **same XPI** in both positions, it serves as a noise-only
+negative control.
+
+A three-pair, five-minute experiment produces paired whole-Extensions-process
+readings but is not automatically proof of extension-private RAM savings.
+A directional process-wide claim needs more runs and uncertainty checks.
+The fixed cosmetic/scriptlet browser fixture and synthetic request corpus
+remain separate **correctness tests**, not part of this default RAM baseline.
+They do not verify the behavior of every rule in the installed default lists.
+
 ## Choose the least noisy measurement that answers the question
 
 For small changes to static network filtering structures, screen with the
@@ -94,6 +127,11 @@ specific to the **tested package**, not a permanent universal constant.
 python tools/meblock/capture_memory.py --offline --settle-seconds 300 --runs 3 --expected-network-filters 252243
 ```
 
+## Historical opt-in synthetic stress tests (not the default baseline)
+
+These older synthetic-rule modes are retained for focused stress testing
+only. **Do not use them for the current default-list optimization baseline.**
+
 To exercise **600,000 network filters in total**, take the verified
 stock engine count (252,243 for this pinned package) and inject
 **347,757 additional deterministic hostname rules** into a disposable
@@ -138,13 +176,9 @@ selected-list fingerprints, **matching SHA-256 of all bundled public text filter
 assets**, a stable source hash per build, and a matching Firefox version.
 The bundled-asset hash protects against changed list content even if the
 compiled rule *count* stays the same; it does not fingerprint separately
-downloaded user subscriptions. Both builds receive the **same** synthetic additions
-when requested; a build-to-build memory test is never confused with a
-stock-versus-more-rules test.
-
-```powershell
-python tools/meblock/memory_experiment.py --addon dist/build/upstream-test.xpi --candidate-addon dist/build/meblock-test.xpi --pairs 3 --settle-seconds 300 --base-network-filters 252243 --extra-synthetic-hostnames 347757
-```
+downloaded user subscriptions. Use the default-only build comparison shown
+at the top of this document. The legacy synthetic volume flags are an
+independent optional experiment, not an optimization baseline.
 
 These named example XPI inputs must be built locally first, and the actual
 stock network count must be verified for those packages. Do not use
