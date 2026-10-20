@@ -457,6 +457,64 @@ per identical-build condition* plus the separate 300-second default-list
 CPU/RAM null control; one pair is diagnostic only. Cross-version A/B
 comparisons must preserve the same workload and method.
 
+## Candidate-effect noise preflight (before optimization)
+
+The **11-gate, three-pair baseline readiness** certifies the controlled
+instrumentation and behavioral fixtures, **not** enough precision to claim
+a small (for example 3%) candidate speedup. The same-code official
+Firefox benchmark has sometimes shown large paired differences even
+when all synthetic request decisions agree.
+
+To test whether the *current host/runtime* has a sufficiently small
+measured null bias for subsequent 3% candidate screening, first collect
+a new **10-pair** normal default-enabled-list, same-compiled-engine run.
+The runner alternates A/B then B/A order and creates a separate isolated
+Firefox profile for every arm:
+
+```powershell
+python tools/meblock/compare_original.py --default-lists --dataset dist/build/default-rule-probes-mixed.json --runs 10
+python tools/meblock/candidate_noise_preflight.py --null-report dist/build/meblock-comparison/SESSION/report.json --dataset dist/build/default-rule-probes-mixed.json --memory-report dist/build/private-memory/PAIRED-MEMORY.json --stock-xpi dist/build/uBlock0.firefox.xpi
+```
+
+Use the actual local, ignored `SESSION` and pinned private memory report.
+The preflight checks **every saved Firefox profile** against the
+report using the comparison oracle, the exact current harness/dataset
+hashes, the recorded disposable XPI SHA-256s, and a byte-level match of
+all unmodified production XPI files to the pinned memory-control package.
+A sensitivity-only, injected, mismatched, stale, nondefault, different-build
+or incomplete run fails closed. The CLI prints only bounded numeric
+statistics and neutral status—never local report paths, browsing URLs
+or filter text.
+
+The statistical preflight needs **at least 10 balanced independent AB/BA
+pairs** (not 10 repeated samples inside one Firefox profile). It
+calculates each pair's log-ratio and a deterministic paired bootstrap
+95% interval for the official benchmark **and** script, image, XHR and
+stylesheet batched p95. It returns `ready_for_candidate_effect_screening`
+only when every null interval fits strictly inside **±3%**.
+An ordinary three-pair control cannot satisfy this, even with exactly
+matching times. Do not discard slow profiles or relax the cutoff.
+A qualifying result is an **empirical noise/bias preflight only**,
+not 80% statistical power, a prospective minimum-detectable-effect
+guarantee, an actual candidate comparison, or a real-site latency claim.
+Different-build candidate validation still needs independent >=10-pair
+trials, behavior and source impact coverage, multiple-condition regression
+checks and separate CPU/RAM evidence.
+
+**Measured outcome (2026-10-20):** The first full 10-pair same-engine
+null comparison was rejected by this new preflight. Its official
+benchmark median paired role difference was **−16.65%**, with
+bootstrap interval **−45.56% to +26.69%**; even the script batched
+cohort had an interval of **−4.63% to +4.92%**, outside the strict
+±3% target. The other request categories also failed their
+equivalence checks and the ten-profile timer-stability gate failed.
+All twenty Firefox profiles were included. The ordinary three-pair
+baseline may still be **11/11 instrumentation-ready**, but this
+additional null analysis explicitly says **NOT READY to substantiate
+a 3% optimization effect**. The 10-pair report stays local/ignored.
+
+
+
 ## Deliberate timing-sensitivity positive control (disposable only)
 
 To test whether the current matcher-timing instrumentation can **notice

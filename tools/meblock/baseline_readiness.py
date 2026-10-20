@@ -125,7 +125,7 @@ def verify_report_replay(report_path, dataset_path, report, *, default_lists):
             not dataset_path.is_file()
             or not 0 < dataset_path.stat().st_size <= 16 * 1024 * 1024
             or type(report.get("runs_per_build")) is not int
-            or not (3 if default_lists else 1) <= report["runs_per_build"] <= 12
+            or not (3 if default_lists else 1) <= report["runs_per_build"] <= 40
             or report.get("default_enabled_lists_only") is not default_lists
             or not isinstance(report.get("comparison"), dict)
         ):

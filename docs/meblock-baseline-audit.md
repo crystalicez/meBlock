@@ -210,6 +210,54 @@ Correctness evidence must use the exact current browser fixture version
 (v9), so any changed synthetic network/cosmetic oracle invalidates stale
 reports and requires new isolated Firefox checks.
 
+### Separate 3%-effect noise qualification (NOT an eleventh baseline gate)
+
+The general **11/11 baseline** and test-only large-delay sensitivity check
+do not validate small speedups. From a real byte-identical 3-pair Firefox
+control, the official benchmark reported a **20.52% median paired role
+difference**, even though compiled filtering engine bytes were equal.
+To prevent using that variability as evidence of a 3% optimization,
+`tools/meblock/candidate_noise_preflight.py` now provides a separate,
+fail-closed **pre-candidate noise screen** using at least **ten**
+balanced, independent AB/BA same-build Firefox pairs. It requires current
+harness fingerprints, the exact default-list corpus, full saved-profile
+comparison replay, package hashes, a byte-for-byte production XPI match
+to the separately pinned CPU/RAM memory-control package, and zero
+injected timing/filters. Every 95% paired-bootstrap *median log ratio*
+null interval—official matcher duration and the four request-type
+batched p95 cohorts—must lie strictly within **±3%**.
+
+The tool refuses to grant small-effect qualification on the earlier
+three-pair report. A **fresh ten-pair/twenty-profile Firefox 157 null
+control** on 2026-10-20 provided the first direct small-effect test:
+the normal build and exact package hashes, all 1,552 default-list
+requests/profile, filter decisions and full per-profile comparison
+replay passed. But `ready_for_candidate_effect_screening=false`,
+even with the required pair count, because the observed clock
+stability and every paired null equivalence test **failed**.
+
+| Same-engine null metric | Median paired difference | Bootstrap 95% interval |
+| --- | ---: | ---: |
+| Official benchmark | −16.65% | −45.56% to +26.69% |
+| Script amortized p95 | +1.00% | −4.63% to +4.92% |
+| Image amortized p95 | +2.61% | −12.50% to +27.49% |
+| XHR amortized p95 | +0.39% | −7.93% to +19.48% |
+| Stylesheet amortized p95 | −4.35% | −13.38% to +33.33% |
+
+**No optimization occurred.** These are identical-engine Firefox
+role differences, not proof of a speedup or slowdown. In particular,
+a candidate claimed to improve the official metric by just 3% could
+easily be overwhelmed by this observed null variability. All ten
+pairs were retained; no slow profile was excluded or threshold changed.
+The standalone tool and baseline audit print redacted statuses and
+numerical results, not private URLs, profile paths or filter text.
+An eventual preflight pass would be **empirical null equivalence**,
+not proof of 80% detection power, an actual engine optimization,
+or license to overlook missing hot-path behavior coverage.
+A separate different-source candidate experiment, additional
+correctness checks and realistic workload confirmation would still be
+required.
+
 ### Targeted hot-path family gate
 
 The eleven checks above qualify the **measurement setup** only. Before
