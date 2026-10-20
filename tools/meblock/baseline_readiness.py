@@ -109,7 +109,72 @@ def verify_engine_package_identity(default, memory, stock_path, package_paths):
     return True
 
 
-def assess(correctness, default, memory, *, engine_verified=False):
+def verify_report_replay(report_path, dataset_path, report, *, default_lists):
+    """Recompute saved Firefox conclusions from every private per-profile result."""
+    from compare_original import (
+        compare, hash_bytes, read_rule_derived_manifest,
+        summarize_candidate_effects,
+    )
+    from filtering_benchmark import valid_rows
+
+    try:
+        if (
+            not dataset_path.is_file()
+            or not 0 < dataset_path.stat().st_size <= 16 * 1024 * 1024
+            or type(report.get("runs_per_build")) is not int
+            or not (3 if default_lists else 1) <= report["runs_per_build"] <= 12
+            or report.get("default_enabled_lists_only") is not default_lists
+            or not isinstance(report.get("comparison"), dict)
+        ):
+            return False
+        raw = dataset_path.read_bytes()
+        dataset = valid_rows(json.loads(raw))
+        if (
+            report.get("dataset_sha256") != hash_bytes(raw)
+            or report.get("dataset_count") != len(dataset)
+        ):
+            return False
+        manifest = read_rule_derived_manifest(
+            dataset_path, raw, dataset, default_lists,
+        )
+        if (manifest is None) != (not default_lists):
+            return False
+        expected_coverage = (
+            {key: value for key, value in manifest.items()
+             if not key.startswith("_")}
+            if manifest is not None else None
+        )
+        if report.get("rule_derived_probe_coverage") != expected_coverage:
+            return False
+        root = report_path.parent
+        data = {
+            role: [
+                read_local_report(root / f"{role}-run-{index}.json")
+                for index in range(1, report["runs_per_build"] + 1)
+            ]
+            for role in ("upstream", "meblock")
+        }
+        saved = report["comparison"]
+        recalculated = compare(
+            data, dataset,
+            identical_build=saved.get("builds_identical"),
+            default_lists=default_lists,
+        )
+        if manifest is not None:
+            recalculated["rule_derived_observed_effects"] = (
+                summarize_candidate_effects(
+                    data["upstream"][0],
+                    manifest["simple_host_rules_in_shard"],
+                )
+            )
+        return recalculated == saved
+    except (OSError, ValueError, TypeError, KeyError, AttributeError,
+            IndexError, OverflowError):
+        return False
+
+
+def assess(correctness, default, memory, *, engine_verified=False,
+           evidence_replayed=False):
     c = correctness.get("comparison", {})
     d = default.get("comparison", {})
     m = memory
@@ -265,6 +330,7 @@ def assess(correctness, default, memory, *, engine_verified=False):
         "pinned_runtime_inputs": inputs_ready,
         "selected_list_source_provenance": default_ready and source_classification,
         "same_engine_across_memory_and_browser": engine_verified,
+        "per_profile_evidence_replay": evidence_replayed,
         "browser_local_resource_p95": local_resource_ready,
         "amortized_matcher_context_p95_precision": matcher_usable,
     }
@@ -302,6 +368,8 @@ def main(argv=None):
     parser.add_argument("--correctness-report", type=Path, required=True)
     parser.add_argument("--default-report", type=Path, required=True)
     parser.add_argument("--memory-report", type=Path, required=True)
+    parser.add_argument("--correctness-dataset", type=Path, required=True)
+    parser.add_argument("--default-dataset", type=Path, required=True)
     parser.add_argument("--memory-xpi", type=Path, required=True)
     parser.add_argument("--upstream-xpi", type=Path, required=True)
     parser.add_argument("--meblock-xpi", type=Path, required=True)
@@ -316,8 +384,19 @@ def main(argv=None):
                 "meblock": args.meblock_xpi,
             },
         )
+        replayed = (
+            verify_report_replay(
+                args.correctness_report, args.correctness_dataset,
+                correctness, default_lists=False,
+            )
+            and verify_report_replay(
+                args.default_report, args.default_dataset,
+                default, default_lists=True,
+            )
+        )
         result = assess(
-            correctness, default, memory, engine_verified=verified
+            correctness, default, memory, engine_verified=verified,
+            evidence_replayed=replayed,
         )
     except (OSError, ValueError, UnicodeError, TypeError, AttributeError):
         print(json.dumps({

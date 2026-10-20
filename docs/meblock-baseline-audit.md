@@ -48,7 +48,9 @@ revised harness, and a same-XPI CPU/RAM paired control report. For example:
 ```powershell
 python tools/meblock/baseline_readiness.py `
   --correctness-report dist/build/meblock-comparison/<correctness-run>/report.json `
+  --correctness-dataset dist/build/meblock-small.json `
   --default-report dist/build/meblock-comparison/<default-run>/report.json `
+  --default-dataset dist/build/default-rule-probes.json `
   --memory-report dist/build/private-memory/<paired-memory-report>.json `
   --memory-xpi dist/build/uBlock0.firefox.xpi `
   --upstream-xpi dist/build/meblock-comparison/<default-run>/upstream/instrumented.xpi `
@@ -77,6 +79,17 @@ changed file outside this allowlist fails even if the report's XPI
 hash is modified to match. This enforces identical underlying engine
 and filter assets for RAM/CPU and Firefox screening, without
 publishing file contents.
+
+A new ninth **per-profile evidence replay** gate requires the exact private
+correctness and default-list dataset files as explicit inputs. It verifies
+each dataset SHA-256 and rule-derived sidecar, reads every expected Firefox
+profile result from each report's own local directory, recomputes
+upstream/meBlock per-request decisions, modifier vectors, browser behavior,
+timing summaries, engine buffer observations and the default-rule effect
+summary with the original comparison oracle, and requires an exact match
+against each saved report. Changed summary fields, changed/missing profile
+files or a stale dataset fail closed. Only pass/fail is printed; the reports
+and request URLs remain local and are never staged.
 
 The remaining gates require a 300-second three-pair same-XPI CPU/RAM null
 control, real loopback script-resource timing, and a **calibrated amortized
@@ -112,10 +125,11 @@ per-context amortized p95 medians **27.1484 µs upstream and
 The same-source fixture-v8 correctness control passed, and the stock
 CPU/RAM XPI, actual instrumented XPIs and unchanged filtering modules
 passed full package fingerprint and probe-difference validation.
-The local audit consequently returned **8/8 READY for controlled
-instrumentation screening only**. This is not a measured optimization,
-and the earlier failed run documents the possibility of substantial
-real-world timing interference. Repeat candidate/control experiments
+The local audit subsequently returned **9/9 READY for controlled
+instrumentation screening only**, after rechecking the saved Firefox
+per-profile data and corpus hashes through the new replay gate. This is
+not a measured optimization. The earlier failed run documents the
+possibility of substantial environmental timing interference. Repeat candidate/control experiments
 rather than choosing an unusually favorable run.
 
 Firefox's individual-call matcher timer remains too coarse (~20 µs); the

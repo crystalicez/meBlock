@@ -11,7 +11,7 @@ from zipfile import ZipFile
 
 from baseline_readiness import (
     REQUIRED_BEHAVIOR, ENGINE_READONLY_FILES, assess, main,
-    read_local_report, verify_engine_package_identity,
+    read_local_report, verify_engine_package_identity, verify_report_replay,
 )
 
 
@@ -161,7 +161,7 @@ def package_evidence(folder, default, memory):
 class BaselineReadinessTests(unittest.TestCase):
     def test_fully_pinned_controllable_evidence_passes_without_claiming_gain(self):
         reports = evidence()
-        result = assess(*reports, engine_verified=True)
+        result = assess(*reports, engine_verified=True, evidence_replayed=True)
         self.assertTrue(result["ready_for_optimization"])
         self.assertTrue(all(result["checks"].values()))
         self.assertEqual(result["unresolved"], [])
@@ -235,17 +235,17 @@ class BaselineReadinessTests(unittest.TestCase):
             with self.subTest(failed=failed, index=index):
                 reports = list(deepcopy(evidence()))
                 mutation(reports[index])
-                result = assess(*reports, engine_verified=True)
+                result = assess(*reports, engine_verified=True, evidence_replayed=True)
                 self.assertFalse(result["ready_for_optimization"])
                 self.assertIn(failed, result["unresolved"])
 
     def test_missing_data_fails_closed_without_echoing_private_fields(self):
         reports = list(evidence())
         reports[2]["raw_file"] = "private/path/browser-profile.json.gz"
-        result = assess(*reports, engine_verified=True)
+        result = assess(*reports, engine_verified=True, evidence_replayed=True)
         self.assertNotIn("private/path", json.dumps(result))
         reports[2] = {}
-        self.assertFalse(assess(*reports, engine_verified=True)["ready_for_optimization"])
+        self.assertFalse(assess(*reports, engine_verified=True, evidence_replayed=True)["ready_for_optimization"])
 
     def test_package_verification_rejects_engine_drift_and_missing_files(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -368,6 +368,71 @@ class BaselineReadinessTests(unittest.TestCase):
                 },
             ))
 
+    def test_report_replay_rejects_changed_summary_run_and_dataset(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset_path = root / "public-requests.json"
+            requests = [{
+                "frameUrl": "https://reader.example.invalid/",
+                "url": "https://asset.example.invalid/test.js",
+                "cpt": "script",
+            }]
+            raw = json.dumps(requests).encode("utf-8")
+            dataset_path.write_bytes(raw)
+            report_path = root / "report.json"
+            for role in ("upstream", "meblock"):
+                (root / f"{role}-run-1.json").write_text(
+                    json.dumps({"test_value": 1}), encoding="utf-8",
+                )
+
+            def replay_comparison(data, rows, **kwargs):
+                self.assertEqual(len(rows), 1)
+                self.assertFalse(kwargs["default_lists"])
+                return {
+                    "recomputed_value": sum(
+                        item["test_value"]
+                        for role in ("upstream", "meblock")
+                        for item in data[role]
+                    ),
+                }
+
+            report = {
+                "runs_per_build": 1,
+                "default_enabled_lists_only": False,
+                "dataset_count": 1,
+                "dataset_sha256": hashlib.sha256(raw).hexdigest(),
+                "rule_derived_probe_coverage": None,
+                "comparison": {"recomputed_value": 2},
+            }
+            with patch("compare_original.compare", side_effect=replay_comparison):
+                self.assertTrue(verify_report_replay(
+                    report_path, dataset_path, report, default_lists=False,
+                ))
+                changed = deepcopy(report)
+                changed["comparison"]["recomputed_value"] = 3
+                self.assertFalse(verify_report_replay(
+                    report_path, dataset_path, changed, default_lists=False,
+                ))
+                (root / "upstream-run-1.json").write_text(
+                    json.dumps({"test_value": 2}), encoding="utf-8",
+                )
+                self.assertFalse(verify_report_replay(
+                    report_path, dataset_path, report, default_lists=False,
+                ))
+                (root / "upstream-run-1.json").unlink()
+                self.assertFalse(verify_report_replay(
+                    report_path, dataset_path, report, default_lists=False,
+                ))
+            dataset_path.write_text("[]", encoding="utf-8")
+            self.assertFalse(verify_report_replay(
+                report_path, dataset_path, report, default_lists=False,
+            ))
+
+    def test_summary_is_not_enough_without_replay_gate(self):
+        result = assess(*evidence(), engine_verified=True)
+        self.assertFalse(result["ready_for_optimization"])
+        self.assertFalse(result["checks"]["per_profile_evidence_replay"])
+
     def test_report_loading_is_local_size_limited_and_cli_redacts_errors(self):
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory)
@@ -381,11 +446,14 @@ class BaselineReadinessTests(unittest.TestCase):
                 "--correctness-report", str(folder / "correctness.json"),
                 "--default-report", str(folder / "default.json"),
                 "--memory-report", str(folder / "memory.json"),
+                "--correctness-dataset", str(folder / "correctness-dataset.json"),
+                "--default-dataset", str(folder / "default-dataset.json"),
                 "--memory-xpi", str(stock),
                 "--upstream-xpi", str(paths["upstream"]),
                 "--meblock-xpi", str(paths["meblock"]),
             ]
-            self.assertEqual(main(args), 0)
+            with patch("baseline_readiness.verify_report_replay", return_value=True):
+                self.assertEqual(main(args), 0)
             path = folder / "correctness.json"
             path.write_text("{bad private payload", encoding="utf-8")
             with self.assertRaises(ValueError):
