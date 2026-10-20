@@ -315,8 +315,17 @@ The current optimization baseline uses default enabled filter lists from
 the pinned upstream and meBlock builds, with no added test filters:
 
 ```powershell
-python tools/meblock/compare_original.py --default-lists --dataset dist/build/meblock-requests-coverage.json --runs 5
+python tools/meblock/default_rule_probes.py --addon dist/build/uBlock0.firefox.xpi --selected-run dist/build/meblock-comparison/SESSION/upstream-run-1.json --out dist/build/default-rule-probes-mixed.json --shards 256 --shard-index 0
+python tools/meblock/compare_original.py --default-lists --dataset dist/build/default-rule-probes-mixed.json --runs 3
 ```
+
+Replace `SESSION` with a previous ignored Firefox default-list run in
+the local build directory. Both corpus JSON and its manifest remain ignored
+and must be pinned to the selected list keys observed in that disposable
+profile. For performance decisions use **at least three independent
+same-build control pairs** to validate the amortized diagnostic; actual
+different-build change claims need a separate candidate/control design
+with substantially more independent pairs.
 
 `--default-lists` leaves the built-in filter file untouched by the
 regression fixture. Both test builds still receive **identical disposable
@@ -326,9 +335,19 @@ measurement. Only these disposable, instrumented comparison profiles also set
 `privacy.reduceTimerPrecision=false` to allow microsecond-scale
 matcher diagnostics; this is not applied to production Firefox profiles.
 The request dataset is synthetic traffic, but the matching
-engine uses the actual default enabled lists. It checks each dataset
-request's decision and modifier mask against upstream, **not the
-behavior of every enabled filter rule under every possible context**.
+engine uses the actual default enabled lists. For **untyped public
+hostname rule candidates**, the current generator rotates script, image,
+XHR and stylesheet request contexts deterministically. An explicit rule's
+request type still wins; exception-challenge fixtures retain their
+separate, fixed semantics. The public-safe sidecar records only counts per
+request type, never the selected hostnames. A new baseline-readiness gate
+requires **all four types to contribute at least 10% of the default-only
+corpus**; it cross-checks the numeric counts against the actual dataset
+and fails closed for older script-skewed evidence. This is an intentional
+synthetic **balanced diagnostic**, not a real-world traffic distribution.
+It checks each dataset request's decision and modifier mask against
+upstream, **not the behavior of every enabled filter rule under every
+possible context**.
 The loopback page should behave like the without-addon control because
 the additional fixture-specific rules were not installed. Therefore this
 mode does not claim to check the independent positive blocking fixture.
@@ -363,23 +382,23 @@ For retained RAM use **uninstrumented** XPIs with
 
 ## Deterministic page-side workload
 
-The disposable Firefox fixture version 8 has **96 ordinary cosmetic
+The disposable Firefox fixture version 9 has **96 ordinary cosmetic
 rules** (32 each using class, ID and attribute selectors). Each has a matching
 DOM target which must be hidden, and a separately indexed **near-miss
 control** which must stay visible. Another 32 unrelated DOM controls must
-also stay visible. There are **eight procedural `:has-text()` rules**, each
-with its own matching text node and nonmatching text control, plus
-**12 set-constant scriptlets** with a target property and untouched near-miss
-property.
+also stay visible. It additionally covers **eight procedural `:has-text()`,
+four `:has()` and four `:matches-css()` rules** with independent matching
+and near-miss nodes, plus **12 set-constant scriptlets** with targeted and
+untouched near-miss properties.
 
 Firefox checks exact fixed-order boolean vectors rather than aggregate
 counts: presence, hiding and near-miss visibility for the 96 ordinary
-selectors and eight procedural selectors, 32 general visibility checks,
-12 scriptlet results and 12 scriptlet near-miss properties. Without an
-addon, all 104 cosmetic targets must be present and visible, all 136
-near-miss/general controls visible, and no scriptlet target set. With
-the disposable correctness addon, all 104 cosmetic targets must be
-hidden, those 136 controls remain visible, and all 12 scriptlet targets
+selectors and all 16 procedural/relational selectors, 32 general visibility
+checks, 12 scriptlet results and 12 scriptlet near-miss properties. Without an
+addon, all 112 cosmetic targets must be present and visible; each indexed
+near-miss/general control stays visible, and no scriptlet target is set.
+With the disposable correctness addon, all 112 cosmetic targets must be
+hidden and all near-miss controls remain visible; all 12 scriptlet targets
 must be set. Scriptlet near-miss properties remain untouched in both cases.
 
 Every boolean position is compared to the expected result after the initial
@@ -394,9 +413,9 @@ fail.
 This is a controlled behavior fixture, **not** a demonstration that every
 possible option, filter interaction or every default-list rule has been
 exercised. A synthetic 600k corpus exists only for opt-in stress tests,
-not baseline performance acceptance. The fixture covers eight
-`:has-text()` rules, not arbitrary procedural cosmetics, advanced
-scriptlets or normal user browsing. Only compare navigation timings with
+not baseline performance acceptance. The fixture covers three selected procedural/relational selector families,
+not arbitrary procedural cosmetics, advanced scriptlets or normal user
+browsing. Only compare navigation timings with
 the **same fixture version** and equivalent pinned inputs.
 
 ## Calibrated amortized matcher context p95 (test-only)

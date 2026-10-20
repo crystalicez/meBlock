@@ -30,6 +30,12 @@ REQUEST_TYPES = {
     "xhr": ("xmlhttprequest", "probe.json"),
 }
 PARTY_OPTIONS = {"third-party", "3p", "1p", "~third-party"}
+UNRESTRICTED_TYPES = (
+    ("script", "probe.js"),
+    ("image", "probe.png"),
+    ("xmlhttprequest", "probe.json"),
+    ("stylesheet", "probe.css"),
+)
 MAX_REQUESTS = 20000
 
 
@@ -257,7 +263,11 @@ def build_probes(archive, *, shard_index, shard_count, max_requests=MAX_REQUESTS
         tokens = (option or "").split(",")
         request_option = next((token for token in tokens if token in REQUEST_TYPES),
                               None)
-        request_type, filename = REQUEST_TYPES[request_option]
+        request_type, filename = (
+            UNRESTRICTED_TYPES[index % len(UNRESTRICTED_TYPES)]
+            if request_option is None and not exception_challenge
+            else REQUEST_TYPES[request_option]
+        )
         labels = host.split(".")
         near_miss = (
             f"mb-exception-control-{index:05d}.test"
@@ -296,6 +306,9 @@ def build_probes(archive, *, shard_index, shard_count, max_requests=MAX_REQUESTS
         "positive_requests": len(shard) * 2,
         "near_miss_requests": len(shard) * 2,
         "request_count": len(rows),
+        "request_type_request_counts": dict(sorted(Counter(
+            row["cpt"] for row in rows
+        ).items())),
         **({
             "exception_challenge": True,
             "expected_explicit_allow_by_origin": expected_allow,
@@ -305,8 +318,9 @@ def build_probes(archive, *, shard_index, shard_count, max_requests=MAX_REQUESTS
             "reserved .test controls and disposable synthetic blockers; NOT an "
             "unmodified default-list baseline or unique filter attribution."
             if exception_challenge else
-            "Bundled public simple host-anchored candidates and restricted "
-            "request-type/party modifiers only. Some rules can be shadowed "
+            "Bundled public simple host-anchored candidates; rules without "
+            "request-type restrictions are distributed across script, image, "
+            "XHR and stylesheet contexts. Some rules can be shadowed "
             "or have a false positive from another rule. Each candidate "
             "uses external-reader and same-host origins, with near-miss "
             "requests that need not have identical party contexts. Differential "

@@ -88,6 +88,10 @@ def evidence():
             "selected_unresolved_list_count": 0,
             "simple_host_rules_in_shard": 365,
             "request_count": 1460,
+            "request_type_request_counts": {
+                "script": 360, "image": 360,
+                "xmlhttprequest": 360, "stylesheet": 380,
+            },
             "dataset_sha256": "f" * 64,
         },
         "unfiltered_fixture_control": {
@@ -223,6 +227,15 @@ class BaselineReadinessTests(unittest.TestCase):
              "selected_list_source_provenance"),
             (1, lambda value: value.update(dataset_count=1459),
              "selected_list_source_provenance"),
+            (1, lambda value: value["rule_derived_probe_coverage"].update(
+                request_type_request_counts={"script": 1460}),
+             "default_request_type_breadth"),
+            (1, lambda value: value["rule_derived_probe_coverage"].update(
+                request_type_request_counts={
+                    "script": 1160, "image": 100,
+                    "xmlhttprequest": 100, "stylesheet": 100,
+                }),
+             "default_request_type_breadth"),
             (1, lambda value: value["rule_derived_probe_coverage"].update(
                 selected_remote_only_list_count=2),
              "selected_list_source_provenance"),

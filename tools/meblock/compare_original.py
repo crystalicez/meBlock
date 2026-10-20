@@ -6,6 +6,7 @@ filter corpus remain under dist/build/; the repository source is unchanged.
 """
 
 import argparse
+from collections import Counter
 import hashlib
 import io
 import json
@@ -1068,6 +1069,19 @@ def read_rule_derived_manifest(dataset, payload, rows, default_lists):
         or manifest.get("dataset_sha256") != hash_bytes(payload)
     ):
         raise ValueError("Rule-derived request manifest differs from dataset")
+    type_counts = manifest.get("request_type_request_counts")
+    if type_counts is not None:
+        actual = dict(sorted(Counter(row["cpt"] for row in rows).items()))
+        if (
+            not isinstance(type_counts, dict)
+            or type_counts != actual
+            or any(type(value) is not int or value < 4 or value % 4
+                   for value in type_counts.values())
+            or not set(type_counts) <= {
+                "script", "image", "xmlhttprequest", "stylesheet"
+            }
+        ):
+            raise ValueError("Invalid default-list request type mix")
     assets = manifest.get("bundled_asset_contents_sha256")
     if not isinstance(assets, str) or re.fullmatch(r"[0-9a-f]{64}", assets) is None:
         raise ValueError("Rule-derived asset digest is invalid")
@@ -1117,6 +1131,8 @@ def read_rule_derived_manifest(dataset, payload, rows, default_lists):
                 manifest["selected_without_bundled_asset_count"]):
             raise ValueError("Invalid selected default-list provenance")
     allowed = ("schema", *numbers, "dataset_sha256", "bundled_asset_contents_sha256")
+    if type_counts is not None:
+        allowed += ("request_type_request_counts",)
     badfilter_fields = (
         "simple_host_rule_before_badfilter_unique",
         "excluded_by_bundled_badfilter_rule_count",

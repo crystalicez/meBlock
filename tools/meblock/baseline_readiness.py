@@ -226,6 +226,16 @@ def assess(correctness, default, memory, *, engine_verified=False,
     identity = m.get("pinned_profile_identity", {})
     coverage = default.get("rule_derived_probe_coverage") or {}
     buffers = (d.get("engine_buffer_footprint") or {}).get("upstream") or {}
+    mix = coverage.get("request_type_request_counts")
+    request_type_breadth = (
+        isinstance(mix, dict)
+        and set(mix) == {"script", "image", "xmlhttprequest", "stylesheet"}
+        and all(type(n) is int and n >= 4 and n % 4 == 0
+                for n in mix.values())
+        and type(default.get("dataset_count")) is int
+        and sum(mix.values()) == default["dataset_count"]
+        and all(n >= default["dataset_count"] * 0.10 for n in mix.values())
+    )
     source_classification = (
         type(coverage.get("selected_list_count")) is int
         and type(coverage.get("selected_locally_mapped_list_count")) is int
@@ -282,7 +292,7 @@ def assess(correctness, default, memory, *, engine_verified=False,
     inputs_ready = (
         default_ready and cpu_ready and correctness_ready and same_sources
         and matching_probes
-        and source_classification
+        and source_classification and request_type_breadth
         and identity.get("network_filters") == buffers.get("compiled_network_filters")
         and identity.get("selected_list_keys_sha256") ==
         coverage.get("selected_list_keys_sha256")
@@ -338,6 +348,7 @@ def assess(correctness, default, memory, *, engine_verified=False,
         "paired_cpu_memory_null_control": cpu_ready,
         "pinned_runtime_inputs": inputs_ready,
         "selected_list_source_provenance": default_ready and source_classification,
+        "default_request_type_breadth": default_ready and request_type_breadth,
         "same_engine_across_memory_and_browser": engine_verified,
         "per_profile_evidence_replay": evidence_replayed,
         "browser_local_resource_p95": local_resource_ready,

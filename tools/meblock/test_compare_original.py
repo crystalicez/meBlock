@@ -768,6 +768,24 @@ class CompareTests(unittest.TestCase):
             self.assertEqual(safe["request_count"], 4)
             self.assertEqual(safe["bundled_asset_contents_sha256"], "a" * 64)
             self.assertNotIn("private_raw_filter", safe)
+            with_mix = {
+                **manifest, "request_type_request_counts": {"script": 4},
+            }
+            sidecar.write_text(json.dumps(with_mix), encoding="utf-8")
+            checked_mix = runner.read_rule_derived_manifest(
+                dataset, payload, rows, True,
+            )
+            self.assertEqual(
+                checked_mix["request_type_request_counts"], {"script": 4},
+            )
+            with_mix["request_type_request_counts"] = {
+                "script": 3, "image": 1,
+            }
+            sidecar.write_text(json.dumps(with_mix), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "request type mix"):
+                runner.read_rule_derived_manifest(
+                    dataset, payload, rows, True,
+                )
             counted = {
                 **manifest,
                 "simple_host_rule_before_badfilter_unique": 19,

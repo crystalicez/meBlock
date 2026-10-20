@@ -75,7 +75,47 @@ class DefaultRuleProbeTests(unittest.TestCase):
             {"frameUrl": "https://beta.example/page",
              "url": "https://near-beta.example/probe.png", "cpt": "image"},
         ])
-        self.assertEqual({r["cpt"] for r in rows}, {"image", "script"})
+        self.assertEqual(
+            {r["cpt"] for r in rows}, {"image", "script", "xmlhttprequest"}
+        )
+        self.assertEqual(
+            coverage["request_type_request_counts"],
+            {"image": 8, "script": 4, "xmlhttprequest": 4},
+        )
+
+    def test_unrestricted_rules_balance_request_types_without_adding_filters(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "public.xpi"
+            with ZipFile(path, "w") as destination:
+                destination.writestr(
+                    "assets/ublock/filters.min.txt",
+                    "\n".join(
+                        f"||public-{index:03}.example^" for index in range(16)
+                    ),
+                )
+            with ZipFile(path) as source:
+                rows, coverage = probes.build_probes(
+                    source, shard_index=0, shard_count=1,
+                )
+                repeated, repeated_coverage = probes.build_probes(
+                    source, shard_index=0, shard_count=1,
+                )
+        self.assertEqual(rows, repeated)
+        self.assertEqual(coverage, repeated_coverage)
+        self.assertEqual(len(rows), 64)
+        self.assertEqual(
+            coverage["request_type_request_counts"],
+            {
+                "script": 16, "image": 16,
+                "xmlhttprequest": 16, "stylesheet": 16,
+            },
+        )
+        for group in range(16):
+            block = rows[4 * group:4 * group + 4]
+            self.assertEqual(len({item["cpt"] for item in block}), 1)
+            self.assertEqual(block[0]["url"], block[2]["url"])
+            self.assertEqual(block[1]["url"], block[3]["url"])
+            self.assertNotEqual(block[0]["url"], block[1]["url"])
 
     def test_cross_asset_badfilter_excludes_disabled_simple_host_candidates(self):
         with tempfile.TemporaryDirectory() as directory:

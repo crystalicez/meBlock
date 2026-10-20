@@ -50,7 +50,7 @@ python tools/meblock/baseline_readiness.py `
   --correctness-report dist/build/meblock-comparison/<correctness-run>/report.json `
   --correctness-dataset dist/build/meblock-small.json `
   --default-report dist/build/meblock-comparison/<default-run>/report.json `
-  --default-dataset dist/build/default-rule-probes.json `
+  --default-dataset dist/build/default-rule-probes-mixed.json `
   --memory-report dist/build/private-memory/<paired-memory-report>.json `
   --memory-xpi dist/build/uBlock0.firefox.xpi `
   --upstream-xpi dist/build/meblock-comparison/<default-run>/upstream/instrumented.xpi `
@@ -66,7 +66,36 @@ and a separate **selected-list source-provenance gate**. That gate verifies
 the exact request dataset digest/row count, the packaged-versus-external/user
 source categories and zero unresolved selected sources; it does **not**
 claim to reproduce external public text or any user-filter content.
-An additional eighth gate verifies the **actual XPI files**, not merely
+
+The added **default-request-type breadth gate** rejects performance corpora
+dominated by one request type. The original 1,552-request shard
+contained 1,548 scripts and four images, insufficient for cross-type
+screening. The new deterministic generator assigns unrestricted public
+hostname rule candidates across script, image, XHR and stylesheet, while
+respecting explicitly typed rules. Its ignored manifest records numeric
+counts verified directly against the request dataset, and **each of the
+four types must supply at least 10%**. Older datasets without a
+validated type breakdown fail closed. This is a balanced *synthetic*
+matcher diagnostic, not a representative distribution of real user
+traffic and not additional installed filtering rules.
+
+On 2026-10-20 the newly balanced **default-enabled-list** corpus contained
+**1,552 requests** (384 scripts, 392 images, 388 XHR and 388 stylesheets).
+A fresh **three-pair/six-profile** Firefox upstream-vs-meBlock run and a
+separate synthetic fixture-v9 correctness pair passed, as did exact
+per-profile evidence replay and the unchanged **three-pair/300-second
+CPU/RAM same-XPI negative control**. The updated instrument-readiness
+result was **10/10 PASS**, with **no injected filters** in the default-list
+profiles. The amortized-context p95 medians were **8.2422 µs upstream**
+and **7.9297 µs meBlock**, and relative cross-profile ranges
+**8.53%** and **2.96%** respectively. The values are for **same-code
+controls**, not an improvement. They cannot be compared to historical
+script-dominated corpus p95 values: both request composition and the
+measured path differ. The separate specific-engine-change gate remains
+NOT READY for broad network engine edits without the missing family
+fixtures.
+
+An existing gate verifies the **actual XPI files**, not merely
 their reported filter counts: SHA-256 of the stock XPI must equal the
 memory-control package hash, and each instrumented XPI must match its
 reported package hash. The validator compares **every packaged file** against the stock
@@ -100,13 +129,13 @@ reports and requires new isolated Firefox checks.
 
 ### Targeted hot-path family gate
 
-The nine checks above qualify the **measurement setup** only. Before
+The ten checks above qualify the **measurement setup** only. Before
 modifying an engine hot path, append one or more
 `--target-family FAMILY-ID` arguments to the same command. The optional
-tenth gate uses the **private per-profile correctness results**, not just
+eleventh gate uses the **private per-profile correctness results**, not just
 a matching summary: it checks independently expected positive and negative
 network outcomes per named case or per-index page-effect vectors, with the
-without-addon inverse controls. It also requires all nine baseline gates
+without-addon inverse controls. It also requires all ten baseline gates
 and their replay to pass. For example, append
 `--target-family network-exceptions --target-family cosmetic-has` to
 require both families, or `--target-family network-wildcard-anchors` for
@@ -121,7 +150,7 @@ marks **seven unproven families**: other scriptlets, advanced network
 modifiers, cosmetic exceptions, list-update/compilation behavior, external
 list per-rule contexts, user-filter per-rule contexts and nested frames.
 Requesting one of these missing families exits **1**, even when the
-general baseline is 9/9 green. Mutation tests deliberately corrupt
+general baseline is 10/10 green. Mutation tests deliberately corrupt
 individual decisions and vectors to prove a targeted pass becomes a
 failure.
 
@@ -140,7 +169,7 @@ The historical `ready_for_optimization` field alone only indicates
 that the requested instrumentation/fixture screen passed, and must
 not be treated as permission to change any arbitrary engine module.
 
-With the current fixture v9 and real Firefox 9/9 general evidence,
+With the earlier fixture v9 and archived Firefox 9/9 general evidence,
 `--target-family network-exceptions` passes the family diagnostic,
 whereas `--target-path src/js/static-net-filtering.js` correctly
 returns **NOT READY (9/10)** due to missing advanced-family/context
