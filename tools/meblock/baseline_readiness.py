@@ -9,7 +9,7 @@ from pathlib import Path
 from zipfile import BadZipFile, ZipFile
 
 from browser_fixtures import FIXTURE_VERSION
-from coverage_matrix import FAMILY_IDS, family_coverage
+from coverage_matrix import FAMILY_IDS, affected_families, family_coverage
 
 
 REQUIRED_BEHAVIOR = (
@@ -386,6 +386,10 @@ def main(argv=None):
         "--target-family", choices=FAMILY_IDS, action="append",
         help="Require independent Firefox coverage for an affected hot-path family",
     )
+    parser.add_argument(
+        "--target-path", action="append",
+        help="Repo-relative production module path; unknown modules fail closed",
+    )
     args = parser.parse_args(argv)
     try:
         correctness = read_local_report(args.correctness_report)
@@ -411,7 +415,11 @@ def main(argv=None):
             correctness, default, memory, engine_verified=verified,
             evidence_replayed=replayed,
         )
-        if args.target_family:
+        if args.target_family or args.target_path:
+            module_impact = (
+                affected_families(args.target_path)
+                if args.target_path else None
+            )
             correctness_runs = {
                 role: [
                     read_local_report(
@@ -422,17 +430,30 @@ def main(argv=None):
                 for role in ("upstream", "meblock")
             } if replayed else {}
             coverage = family_coverage(correctness, correctness_runs)
-            requested = sorted(set(args.target_family))
+            requested = sorted(
+                set(args.target_family or ())
+                | set(module_impact["families"] if module_impact else ())
+            )
             selected = {name: coverage[name] for name in requested}
             target_ready = (
                 result["ready_for_optimization"]
+                and (module_impact is None or module_impact["resolved"])
                 and all(item["verified"] is True for item in selected.values())
             )
+            if module_impact is not None:
+                result["target_module_impact"] = {
+                    "audited_module_mapping": module_impact["resolved"],
+                    "module_count": len(args.target_path),
+                    "unmapped_count": module_impact["unmapped_count"],
+                }
             result["targeted_hot_path_coverage"] = selected
             result["checks"]["targeted_hot_path_coverage"] = target_ready
             if not target_ready:
                 result["unresolved"].append("targeted_hot_path_coverage")
             result["ready_for_optimization"] = target_ready
+        result["ready_for_specific_engine_change"] = (
+            bool(args.target_path) and result["ready_for_optimization"]
+        )
     except (OSError, ValueError, UnicodeError, TypeError, AttributeError):
         print(json.dumps({
             "schema": "meblock-baseline-readiness-v1",

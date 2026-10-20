@@ -110,6 +110,88 @@ FAMILY_IDS = (
 
 CASE_INDEX = {case[0]: index for index, case in enumerate(PRECEDENCE_CASES)}
 
+# Conservative source-file impact map. Each missing context intentionally
+# makes the target gate fail, rather than allowing a narrow positive fixture
+# to certify a broad production hot-path edit.
+ALL_NETWORK = tuple(NETWORK_FAMILIES)
+ALL_COSMETIC = tuple(
+    name for name in PAGE_FAMILIES if name.startswith("cosmetic-")
+)
+LIST_CONTEXTS = (
+    "external-list-rule-contexts", "user-filter-rule-contexts",
+)
+MODULE_IMPACTS = {
+    "src/js/static-net-filtering.js": (
+        *ALL_NETWORK, "network-redirect", "network-removeparam",
+        "network-advanced-modifiers", "filter-list-update-compilation",
+        "nested-frame-contexts", *LIST_CONTEXTS,
+    ),
+    "src/js/filtering-context.js": (
+        *ALL_NETWORK, "dynamic-firewall", "network-advanced-modifiers",
+        "nested-frame-contexts", *LIST_CONTEXTS,
+    ),
+    "src/js/cosmetic-filtering.js": (
+        *ALL_COSMETIC, "cosmetic-exceptions", "nested-frame-contexts",
+        *LIST_CONTEXTS,
+    ),
+    "src/js/scriptlet-filtering.js": (
+        "scriptlet-set-constant", "scriptlet-other-families",
+        "nested-frame-contexts", *LIST_CONTEXTS,
+    ),
+    "src/js/scriptlet-filtering-core.js": (
+        "scriptlet-set-constant", "scriptlet-other-families",
+        "nested-frame-contexts", *LIST_CONTEXTS,
+    ),
+    "src/js/redirect-engine.js": (
+        "network-redirect", "network-advanced-modifiers",
+        *LIST_CONTEXTS,
+    ),
+    "src/js/dynamic-net-filtering.js": (
+        "dynamic-firewall", "nested-frame-contexts",
+    ),
+    "src/js/url-net-filtering.js": (
+        "dynamic-firewall", "nested-frame-contexts",
+    ),
+    "src/js/static-filtering-parser.js": (
+        *ALL_NETWORK, *ALL_COSMETIC, "scriptlet-set-constant",
+        "scriptlet-other-families", "network-advanced-modifiers",
+        "cosmetic-exceptions", "filter-list-update-compilation",
+        "nested-frame-contexts", *LIST_CONTEXTS,
+    ),
+    "src/js/static-ext-filtering.js": (
+        *ALL_COSMETIC, "scriptlet-set-constant", "scriptlet-other-families",
+        "cosmetic-exceptions", "filter-list-update-compilation",
+        "nested-frame-contexts", *LIST_CONTEXTS,
+    ),
+    "src/js/filtering-engines.js": tuple(FAMILY_IDS),
+}
+
+if any(not set(families) <= set(FAMILY_IDS)
+       for families in MODULE_IMPACTS.values()):
+    raise AssertionError("Source impact map contains an unknown test family")
+
+
+def affected_families(paths):
+    """Resolve audited repo paths; unknown, private or malformed paths fail closed.
+
+    Only the known family IDs and a count are returned: never echo input
+    paths, which could accidentally contain a private local directory.
+    """
+    if not isinstance(paths, (list, tuple)) or not paths:
+        return {"resolved": False, "families": [], "unmapped_count": 1}
+    requested = []
+    unresolved = 0
+    for path in paths:
+        if not isinstance(path, str) or path not in MODULE_IMPACTS:
+            unresolved += 1
+        else:
+            requested.extend(MODULE_IMPACTS[path])
+    return {
+        "resolved": unresolved == 0,
+        "families": sorted(set(requested)),
+        "unmapped_count": unresolved,
+    }
+
 
 def family_coverage(report, runs):
     """Return bounded aggregate proof statuses; never serialize request content."""

@@ -10,8 +10,8 @@ from browser_fixtures import (
     WITH_ADDON, WITHOUT_ADDON,
 )
 from coverage_matrix import (
-    CASE_INDEX, FAMILY_IDS, NETWORK_FAMILIES, PAGE_FAMILIES,
-    UNTESTED_FAMILIES, family_coverage,
+    CASE_INDEX, FAMILY_IDS, MODULE_IMPACTS, NETWORK_FAMILIES, PAGE_FAMILIES,
+    UNTESTED_FAMILIES, affected_families, family_coverage,
 )
 
 
@@ -95,6 +95,37 @@ class FamilyCoverageTests(unittest.TestCase):
                     else:
                         runs["upstream"][0][bucket][field] = "changed"
                     self.assertFalse(family_coverage(report, runs)[family]["verified"])
+
+    def test_source_impact_map_includes_conservative_untested_contexts(self):
+        self.assertGreaterEqual(len(MODULE_IMPACTS), 10)
+        for module, expected in MODULE_IMPACTS.items():
+            with self.subTest(module=module):
+                resolved = affected_families([module])
+                self.assertTrue(resolved["resolved"])
+                self.assertEqual(resolved["unmapped_count"], 0)
+                self.assertEqual(resolved["families"], sorted(set(expected)))
+                self.assertTrue(set(expected) <= set(FAMILY_IDS))
+                # A source-file edit must not be certified solely by passing
+                # a narrow synthetic fixture; each known hot path includes
+                # at least one not-yet-proven behavior.
+                self.assertTrue(set(expected) & set(UNTESTED_FAMILIES))
+
+    def test_source_impact_map_never_echoes_user_supplied_paths(self):
+        inputs = (
+            "src/js/static-net-filtering.js",
+            "src/js/unknown-module.js",
+            "../private/profile/secret.js",
+        )
+        result = affected_families(list(inputs))
+        self.assertFalse(result["resolved"])
+        self.assertEqual(result["unmapped_count"], 2)
+        self.assertIn("network-hostname", result["families"])
+        self.assertIn("network-advanced-modifiers", result["families"])
+        for value in inputs:
+            self.assertNotIn(value, json.dumps(result))
+        self.assertEqual(affected_families([])["resolved"], False)
+        self.assertFalse(affected_families(["src/js/static-net-filtering.js/"])["resolved"])
+        self.assertFalse(affected_families([None])["resolved"])
 
     def test_stale_fixture_no_addon_mutation_and_missing_browser_run_fail_closed(self):
         report, runs = evidence()

@@ -123,11 +123,33 @@ list per-rule contexts, user-filter per-rule contexts and nested frames.
 Requesting one of these missing families exits **1**, even when the
 general baseline is 9/9 green. Mutation tests deliberately corrupt
 individual decisions and vectors to prove a targeted pass becomes a
-failure. This does **not** claim exhaustive context coverage for any
-family. Add a focused synthetic Firefox oracle and negative controls
-before optimizing a currently unproven family; do not downgrade the
-gate, silently substitute general parity, or add those fixture rules to
-default-list performance measurements.
+failure.
+
+For **actual production edits**, also supply the repo-relative module with
+`--target-path src/js/static-net-filtering.js` (repeat for every proposed
+modified module). The conservative mapping in
+`tools/meblock/coverage_matrix.py` automatically expands the affected
+families, including **unproven** advanced modifiers, compilation, external
+and user-list contexts and nested frames for the static network engine.
+Unrecognized or private paths fail closed without being repeated in the
+JSON output. Manually specified `--target-family` values are **additive**,
+not a way to exclude implied source-file risks. The output exposes
+`ready_for_specific_engine_change`, which is **false unless at least one
+recognized production path is supplied and every mapped family passes**.
+The historical `ready_for_optimization` field alone only indicates
+that the requested instrumentation/fixture screen passed, and must
+not be treated as permission to change any arbitrary engine module.
+
+With the current fixture v9 and real Firefox 9/9 general evidence,
+`--target-family network-exceptions` passes the family diagnostic,
+whereas `--target-path src/js/static-net-filtering.js` correctly
+returns **NOT READY (9/10)** due to missing advanced-family/context
+oracles. A completely unmapped production file also fails. This
+does **not** claim exhaustive context coverage for supported families.
+Before changing such a hot path, add focused independent Firefox
+positive/near-miss and interaction cases for all affected unverified
+families; rerun correctness and default-only screening without weakening
+the thresholds or injecting fixture rules into performance measurements.
 
 The remaining gates require a 300-second three-pair same-XPI CPU/RAM null
 control, real loopback script-resource timing, and a **calibrated amortized

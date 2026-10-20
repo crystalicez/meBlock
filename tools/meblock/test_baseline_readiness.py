@@ -1,7 +1,9 @@
 """Public-safe tests for the local baseline evidence gate."""
 
 from copy import deepcopy
+from contextlib import redirect_stdout
 import hashlib
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -481,10 +483,32 @@ class BaselineReadinessTests(unittest.TestCase):
             ]
             with patch("baseline_readiness.verify_report_replay", return_value=True):
                 self.assertEqual(main(args), 0)
+                baseline_stdout = io.StringIO()
+                with redirect_stdout(baseline_stdout):
+                    self.assertEqual(main(args), 0)
+                baseline_summary = json.loads(baseline_stdout.getvalue())
+                self.assertTrue(baseline_summary["ready_for_optimization"])
+                self.assertFalse(
+                    baseline_summary["ready_for_specific_engine_change"]
+                )
                 target = [*args, "--target-family", "network-exceptions"]
                 self.assertEqual(main(target), 0)
+                family_stdout = io.StringIO()
+                with redirect_stdout(family_stdout):
+                    self.assertEqual(main(target), 0)
+                family_summary = json.loads(family_stdout.getvalue())
+                self.assertFalse(family_summary["ready_for_specific_engine_change"])
                 self.assertEqual(
                     main([*args, "--target-family", "scriptlet-other-families"]), 1,
+                )
+                self.assertEqual(
+                    main([*args, "--target-path", "src/js/static-net-filtering.js"]), 1,
+                )
+                self.assertEqual(
+                    main([*target, "--target-path", "src/js/redirect-engine.js"]), 1,
+                )
+                self.assertEqual(
+                    main([*args, "--target-path", "src/js/unmapped.js"]), 1,
                 )
                 changed = list(PRECEDENCE_EXPECTED)
                 changed[2] = 0
