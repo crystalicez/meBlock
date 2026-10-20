@@ -6,7 +6,7 @@ filter rules and expected observations form one versioned behavior contract.
 
 from base64 import b64decode
 
-FIXTURE_VERSION = 6
+FIXTURE_VERSION = 8
 
 DYNAMIC_FIREWALL_EXPECTED = {
     "block": 1,
@@ -48,6 +48,15 @@ PRECEDENCE_RULES = (
     "||mb-fixture-disabled.example.invalid^$script",
     "||mb-fixture-disabled.example.invalid^$script,badfilter",
     "||mb-fixture-not3p.example.invalid^$~third-party",
+    "||mb-fixture-multidomain.example.invalid^$script,domain=mb-fixture-reader.example.invalid|~mb-fixture-excluded.example.invalid",
+    "||mb-fixture-negdomain.example.invalid^$image,domain=~mb-fixture-excluded.example.invalid",
+    "||mb-fixture-combined.example.invalid^$script,third-party",
+    "||mb-fixture-negtype.example.invalid^$~script",
+    "||mb-fixture-firstparty.example.invalid^$1p",
+    "||mb-fixture-multiexception.example.invalid^",
+    "@@||mb-fixture-multiexception.example.invalid^$image,domain=mb-fixture-reader.example.invalid|~mb-fixture-excluded.example.invalid",
+    r"/^https:\/\/mb-fixture-pathcase\.example\.invalid\/Blocked\.js$/$script,match-case",
+    "||mb-fixture-from.example.invalid^$from=mb-fixture-reader.example.invalid",
 )
 
 # (name, request URL, document URL, request type, expected matchRequest decision)
@@ -72,11 +81,35 @@ PRECEDENCE_CASES = (
     ("disabled-by-badfilter", "mb-fixture-disabled", "reader", "script", 0),
     ("first-party-only-block", "mb-fixture-not3p", "self", "script", 1),
     ("third-party-not-blocked", "mb-fixture-not3p", "reader", "script", 0),
+    ("multi-domain-included", "mb-fixture-multidomain", "mb-fixture-reader", "script", 1),
+    ("multi-domain-excluded", "mb-fixture-multidomain", "mb-fixture-excluded", "script", 0),
+    ("multi-domain-unrelated", "mb-fixture-multidomain", "reader", "script", 0),
+    ("negative-domain-other", "mb-fixture-negdomain", "reader", "image", 1),
+    ("negative-domain-excluded", "mb-fixture-negdomain", "mb-fixture-excluded", "image", 0),
+    ("negative-domain-wrong-type", "mb-fixture-negdomain", "reader", "script", 0),
+    ("type-and-party-matched", "mb-fixture-combined", "reader", "script", 1),
+    ("type-and-party-first-party", "mb-fixture-combined", "self", "script", 0),
+    ("type-and-party-wrong-type", "mb-fixture-combined", "reader", "image", 0),
+    ("negated-type-image", "mb-fixture-negtype", "reader", "image", 1),
+    ("negated-type-script", "mb-fixture-negtype", "reader", "script", 0),
+    ("first-party-alias", "mb-fixture-firstparty", "self", "script", 1),
+    ("first-party-alias-external", "mb-fixture-firstparty", "reader", "script", 0),
+    ("multi-domain-exception", "mb-fixture-multiexception", "mb-fixture-reader", "image", 2),
+    ("multi-domain-exception-excluded", "mb-fixture-multiexception", "mb-fixture-excluded", "image", 1),
+    ("multi-domain-exception-wrong-type", "mb-fixture-multiexception", "mb-fixture-reader", "script", 1),
+    ("match-case-exact-path", "mb-fixture-pathcase", "reader", "script", 1, "/Blocked.js"),
+    ("match-case-other-case", "mb-fixture-pathcase", "reader", "script", 0, "/blocked.js"),
+    ("match-case-wrong-type", "mb-fixture-pathcase", "reader", "image", 0, "/Blocked.js"),
+    ("from-allowed-source", "mb-fixture-from", "mb-fixture-reader", "script", 1),
+    ("from-other-source", "mb-fixture-from", "reader", "script", 0),
 )
 
 
 def precedence_case_request(case):
-    name, host, origin, kind, expected = case
+    name, host, origin, kind, expected = case[:5]
+    path = case[5] if len(case) == 6 else (
+        "/test.png" if kind == "image" else "/test.js"
+    )
     target_host = host + ".example.invalid"
     origin_host = (
         target_host if origin == "self"
@@ -85,8 +118,7 @@ def precedence_case_request(case):
     )
     return {
         "frameUrl": "https://" + origin_host + "/",
-        "url": "https://" + target_host + "/test." +
-            ("png" if kind == "image" else "js"),
+        "url": "https://" + target_host + path,
         "cpt": kind,
     }
 
@@ -98,6 +130,7 @@ RULES += PRECEDENCE_RULES
 EXTRA_COSMETIC_COUNT = 96
 EXTRA_VISIBLE_COUNT = 32
 EXTRA_SCRIPTLET_COUNT = 12
+EXTRA_PROCEDURAL_COUNT = 8
 
 
 def extra_selector(index):
@@ -115,6 +148,9 @@ RULES += tuple(
 ) + tuple(
     f"127.0.0.1##+js(set-constant, mbFixtureVar{index:03}, true)"
     for index in range(EXTRA_SCRIPTLET_COUNT)
+) + tuple(
+    f"127.0.0.1##.mb-procedural-{index:03}:has-text(mb-procedural-needle-{index:03})"
+    for index in range(EXTRA_PROCEDURAL_COUNT)
 )
 
 
@@ -162,6 +198,16 @@ PAGE = PAGE.replace(
         f'<div class="mb-extra-visible" data-mb-control="{index:03}">'
         'visible probe</div>'
         for index in range(EXTRA_VISIBLE_COUNT)
+    ) +
+    ''.join(
+        f'<div id="mb-procedural-{index:03}" '
+        f'class="mb-procedural-{index:03}">mb-procedural-needle-{index:03}</div>'
+        for index in range(EXTRA_PROCEDURAL_COUNT)
+    ) +
+    ''.join(
+        f'<div id="mb-procedural-{index:03}-near" '
+        f'class="mb-procedural-{index:03}">near-miss-{index:03}</div>'
+        for index in range(EXTRA_PROCEDURAL_COUNT)
     )
 )
 
@@ -226,6 +272,16 @@ const visibleControls = Array.from({ length: 32 }, (_, index) => {
     const element = document.querySelector('[data-mb-control="' + suffix(index) + '"]');
     return Boolean(element && !hidden(element));
 });
+const proceduralPresent = Array.from({ length: 8 }, (_, index) =>
+    document.getElementById('mb-procedural-' + suffix(index)) !== null
+);
+const proceduralHidden = Array.from({ length: 8 }, (_, index) =>
+    isHidden('mb-procedural-' + suffix(index))
+);
+const proceduralNearMissVisible = Array.from({ length: 8 }, (_, index) => {
+    const element = document.getElementById('mb-procedural-' + suffix(index) + '-near');
+    return Boolean(element && !hidden(element));
+});
 const scriptletApplied = Array.from({ length: 12 }, (_, index) =>
     window['mbFixtureVar' + suffix(index)] === true
 );
@@ -249,6 +305,9 @@ return {
     extra_cosmetic_hidden_by_index: cosmeticHidden,
     extra_cosmetic_near_miss_visible_by_index: cosmeticNearMissVisible,
     extra_visible_by_index: visibleControls,
+    extra_procedural_present_by_index: proceduralPresent,
+    extra_procedural_hidden_by_index: proceduralHidden,
+    extra_procedural_near_miss_visible_by_index: proceduralNearMissVisible,
     extra_scriptlets_applied_by_index: scriptletApplied,
     extra_scriptlet_near_miss_untouched_by_index: scriptletNearMissUntouched,
     extra_cosmetic_hidden_count: cosmeticHidden.filter(Boolean).length,
@@ -275,6 +334,9 @@ WITHOUT_ADDON = {
     "extra_cosmetic_hidden_by_index": [False] * EXTRA_COSMETIC_COUNT,
     "extra_cosmetic_near_miss_visible_by_index": [True] * EXTRA_COSMETIC_COUNT,
     "extra_visible_by_index": [True] * EXTRA_VISIBLE_COUNT,
+    "extra_procedural_present_by_index": [True] * EXTRA_PROCEDURAL_COUNT,
+    "extra_procedural_hidden_by_index": [False] * EXTRA_PROCEDURAL_COUNT,
+    "extra_procedural_near_miss_visible_by_index": [True] * EXTRA_PROCEDURAL_COUNT,
     "extra_scriptlets_applied_by_index": [False] * EXTRA_SCRIPTLET_COUNT,
     "extra_scriptlet_near_miss_untouched_by_index": [True] * EXTRA_SCRIPTLET_COUNT,
     "extra_cosmetic_hidden_count": 0,
@@ -304,6 +366,7 @@ WITH_ADDON = {
     "xhr_blocked": False,
     "scriptlet_applied": True,
     "extra_cosmetic_hidden_by_index": [True] * EXTRA_COSMETIC_COUNT,
+    "extra_procedural_hidden_by_index": [True] * EXTRA_PROCEDURAL_COUNT,
     "extra_scriptlets_applied_by_index": [True] * EXTRA_SCRIPTLET_COUNT,
     "extra_cosmetic_hidden_count": EXTRA_COSMETIC_COUNT,
     "extra_scriptlets_applied_count": EXTRA_SCRIPTLET_COUNT,

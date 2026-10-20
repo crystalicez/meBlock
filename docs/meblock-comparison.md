@@ -162,21 +162,26 @@ measurement remains historical evidence for the unscreened corpus,
 not an unresolved product bug. No production filters or default-only
 RAM/performance inputs were changed.
 
-## Independent exception and precedence oracle (test-only fixture v6)
+## Independent exception and precedence oracle (test-only fixture v8)
 
-The non-default correctness comparison injects fourteen **synthetic,
+The non-default correctness comparison injects 23 **synthetic,
 isolated** static-network rules in two disposable XPIs, and checks
-**18 fixed per-index expected decisions** (0 no match, 1 block, 2
-explicit allow). It covers plain blocks and near misses, type-specific
-exceptions, third-party exceptions versus same-host requests,
-`important` block precedence, `domain=` scoping, request-type
-restrictions, `badfilter` deactivation and negated third-party options.
+**39 fixed per-index expected decisions** (0 no match, 1 block, 2
+explicit allow). Beyond plain blocks, near misses and priority overrides,
+the cases cover combined request-type/party options, positive and negative
+`domain=` scopes, negated request types, first-party aliases, scoped
+exceptions with matching blocker controls, `from=`, and case-sensitive
+regex URL matching. `important` and `badfilter` remain covered.
 
 Unlike agreement-only upstream/fork parity, these expectations are
 **independent of both engine outputs**. A missing vector, extra entry,
 non-integer decision or incorrect result at any index causes the Firefox
-run to fail. Fixture v6 also retains the loopback browser-page tests
-and their per-index cosmetic/scriptlet assertions.
+run to fail. Fixture v8 also adds eight `:has-text()` procedural cosmetic
+rules, each with an independently checked hidden target and visible
+near-miss node, while retaining 96 ordinary cosmetic rules and 12
+`set-constant` scriptlets with per-index observations. A real Firefox
+upstream/meBlock A/B pair passed all 39 network decisions and browser-page
+assertions on 2026-10-20. This is correctness-only, not a timing claim.
 
 The third-party test document is on a **different registrable site**
 from the target. An initial test mistakenly placed both document and
@@ -190,9 +195,9 @@ Run the existing correctness harness **without** `--default-lists`:
 python tools/meblock/compare_original.py --dataset dist/build/meblock-requests-coverage.json --runs 2
 ```
 
-These fourteen rules and 18 vectors are **never injected or executed**
-in `--default-lists` mode; that mode still checks only the real enabled
-subscription lists. Fixture precedence tests do not prove that all
+These 23 network rules, 39 decision cases and eight procedural cosmetic
+rules are **never injected or executed** in `--default-lists` mode; that
+mode still checks only the real enabled subscription lists. Fixture precedence tests do not prove that all
 default-list exceptions behave correctly or cover every rule priority
 interaction.
 
@@ -343,22 +348,24 @@ For retained RAM use **uninstrumented** XPIs with
 
 ## Deterministic page-side workload
 
-The disposable Firefox fixture version 5 has **96 cosmetic rules** (32 each
-using class, ID and attribute selectors). Each rule has a matching DOM target
-which must be hidden, and a separately indexed **near-miss control** which
-must stay visible. Another 32 unrelated DOM controls must also stay visible.
-There are **12 set-constant scriptlets** with a checked target property and
-an untouched near-miss property for each scriptlet.
+The disposable Firefox fixture version 8 has **96 ordinary cosmetic
+rules** (32 each using class, ID and attribute selectors). Each has a matching
+DOM target which must be hidden, and a separately indexed **near-miss
+control** which must stay visible. Another 32 unrelated DOM controls must
+also stay visible. There are **eight procedural `:has-text()` rules**, each
+with its own matching text node and nonmatching text control, plus
+**12 set-constant scriptlets** with a target property and untouched near-miss
+property.
 
-Firefox reports fixed-order boolean vectors rather than relying on aggregate
-counts: 96 target-presence checks, 96 cosmetic hiding decisions, 96 near-miss
-visibility decisions, 32 general visibility decisions, 12 scriptlet results
-and 12 scriptlet near-miss checks. The independent without-addon control
-expects all 96 targets present but unhidden, all 128 visibility controls
-visible and no scriptlet targets set. With an addon, all 96 targets must be
-hidden, all 128 visibility controls must stay visible and all 12 scriptlet
-targets must be set. The 12 scriptlet near-miss properties must remain
-untouched in either condition.
+Firefox checks exact fixed-order boolean vectors rather than aggregate
+counts: presence, hiding and near-miss visibility for the 96 ordinary
+selectors and eight procedural selectors, 32 general visibility checks,
+12 scriptlet results and 12 scriptlet near-miss properties. Without an
+addon, all 104 cosmetic targets must be present and visible, all 136
+near-miss/general controls visible, and no scriptlet target set. With
+the disposable correctness addon, all 104 cosmetic targets must be
+hidden, those 136 controls remain visible, and all 12 scriptlet targets
+must be set. Scriptlet near-miss properties remain untouched in both cases.
 
 Every boolean position is compared to the expected result after the initial
 load and after **each** navigation used to measure local page-load p95.
@@ -370,9 +377,10 @@ positions without changing reported counts and require the comparison to
 fail.
 
 This is a controlled behavior fixture, **not** a demonstration that every
-possible option, filter interaction or any of the 600,000 production-like
-rules has been exercised. The 600k network corpus is tested separately.
-The fixture does not model arbitrary procedural cosmetic rules, advanced
+possible option, filter interaction or every default-list rule has been
+exercised. A synthetic 600k corpus exists only for opt-in stress tests,
+not baseline performance acceptance. The fixture covers eight
+`:has-text()` rules, not arbitrary procedural cosmetics, advanced
 scriptlets or normal user browsing. Only compare navigation timings with
 the **same fixture version** and equivalent pinned inputs.
 

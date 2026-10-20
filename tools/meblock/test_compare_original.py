@@ -19,6 +19,7 @@ from browser_fixtures import (
     PARAMETERS_WITH_ADDON, PARAMETERS_WITHOUT_ADDON,
     DYNAMIC_FIREWALL_EXPECTED, STATE_PERSISTENCE_KEY,
     EXTRA_COSMETIC_COUNT, EXTRA_VISIBLE_COUNT, EXTRA_SCRIPTLET_COUNT,
+    EXTRA_PROCEDURAL_COUNT,
     FIXTURE_VERSION, PAGE,
     PRECEDENCE_RULES, PRECEDENCE_CASES, PRECEDENCE_EXPECTED,
     precedence_case_request,
@@ -115,10 +116,12 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(missing["verdict"], "FAIL: behavioral regression")
 
     def test_fixture_precedence_oracle_is_fixed_per_index(self):
-        self.assertEqual(len(PRECEDENCE_CASES), 18)
+        self.assertEqual(len(PRECEDENCE_CASES), 39)
         self.assertEqual(
             PRECEDENCE_EXPECTED,
-            (1, 0, 2, 1, 0, 2, 1, 1, 2, 1, 0, 1, 0, 1, 0, 0, 1, 0),
+            (1, 0, 2, 1, 0, 2, 1, 1, 2, 1, 0, 1, 0, 1, 0, 0, 1, 0,
+             1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 2, 1, 1,
+             1, 0, 0, 1, 0),
         )
         self.assertEqual(
             precedence_case_request(PRECEDENCE_CASES[2]),
@@ -127,6 +130,18 @@ class CompareTests(unittest.TestCase):
                 "url": "https://mb-fixture-override.example.invalid/test.js",
                 "cpt": "script",
             },
+        )
+        self.assertEqual(
+            precedence_case_request(PRECEDENCE_CASES[34]),
+            {
+                "frameUrl": "https://reader.test/",
+                "url": "https://mb-fixture-pathcase.example.invalid/Blocked.js",
+                "cpt": "script",
+            },
+        )
+        self.assertEqual(
+            precedence_case_request(PRECEDENCE_CASES[35])["url"],
+            "https://mb-fixture-pathcase.example.invalid/blocked.js",
         )
         self.assertEqual(runner.precedence_mismatches(
             list(PRECEDENCE_EXPECTED), default_lists=False,
@@ -157,11 +172,12 @@ class CompareTests(unittest.TestCase):
         )))
 
     def test_page_side_fixture_is_deterministic_and_has_three_selector_shapes(self):
-        self.assertEqual(FIXTURE_VERSION, 6)
+        self.assertEqual(FIXTURE_VERSION, 8)
         self.assertEqual(EXTRA_COSMETIC_COUNT, 96)
         self.assertEqual(EXTRA_VISIBLE_COUNT, 32)
         self.assertEqual(EXTRA_SCRIPTLET_COUNT, 12)
-        self.assertEqual(len(RULES), 8 + 96 + 12 + 14)
+        self.assertEqual(EXTRA_PROCEDURAL_COUNT, 8)
+        self.assertEqual(len(RULES), 8 + 96 + 12 + 23 + 8)
         self.assertIn("127.0.0.1##.mb-extra-class-000", RULES)
         self.assertIn("127.0.0.1###mb-extra-001", RULES)
         self.assertIn('127.0.0.1##[data-mb-extra="002"]', RULES)
@@ -169,12 +185,16 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(PAGE.count("cosmetic probe</div>"), 96)
         self.assertEqual(PAGE.count("cosmetic near miss</div>"), 96)
         self.assertEqual(PAGE.count("visible probe</div>"), 32)
+        self.assertEqual(PAGE.count("mb-procedural-needle-"), 8)
+        self.assertEqual(PAGE.count("near-miss-"), 8)
         self.assertEqual(WITH_ADDON["extra_cosmetic_hidden_count"], 96)
         self.assertEqual(WITH_ADDON["extra_visible_count"], 32)
         self.assertEqual(WITH_ADDON["extra_scriptlets_applied_count"], 12)
+        self.assertEqual(WITH_ADDON["extra_procedural_hidden_by_index"], [True] * 8)
         self.assertEqual(WITHOUT_ADDON["extra_cosmetic_hidden_count"], 0)
         self.assertEqual(WITHOUT_ADDON["extra_visible_count"], 32)
         self.assertEqual(WITHOUT_ADDON["extra_scriptlets_applied_count"], 0)
+        self.assertEqual(WITHOUT_ADDON["extra_procedural_hidden_by_index"], [False] * 8)
         for expected, hidden, applied in (
             (WITHOUT_ADDON, False, False),
             (WITH_ADDON, True, True),
@@ -192,6 +212,9 @@ class CompareTests(unittest.TestCase):
             "extra_cosmetic_hidden_by_index",
             "extra_cosmetic_near_miss_visible_by_index",
             "extra_visible_by_index",
+            "extra_procedural_present_by_index",
+            "extra_procedural_hidden_by_index",
+            "extra_procedural_near_miss_visible_by_index",
             "extra_scriptlets_applied_by_index",
             "extra_scriptlet_near_miss_untouched_by_index",
         ):
@@ -838,7 +861,10 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(WITH_ADDON["blocked_image"], False)
         self.assertEqual(WITH_ADDON["blocked_frame"], False)
         self.assertTrue(WITH_ADDON["cosmetic_hidden"])
-        self.assertEqual(len(RULES), 22 + EXTRA_COSMETIC_COUNT + EXTRA_SCRIPTLET_COUNT)
+        self.assertEqual(
+            len(RULES),
+            31 + EXTRA_COSMETIC_COUNT + EXTRA_SCRIPTLET_COUNT + EXTRA_PROCEDURAL_COUNT,
+        )
         self.assertTrue(PARAMETERS_WITHOUT_ADDON["tracking_parameter_present"])
         self.assertFalse(PARAMETERS_WITH_ADDON["tracking_parameter_present"])
         self.assertFalse(WITH_ADDON["xhr_blocked"])
