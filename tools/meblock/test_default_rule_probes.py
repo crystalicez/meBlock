@@ -66,9 +66,9 @@ class DefaultRuleProbeTests(unittest.TestCase):
             "scriptlet",
         )
         self.assertEqual(rows[:4], [
-            {"frameUrl": "https://reader.example.invalid/page",
+            {"frameUrl": "https://reader.test/page",
              "url": "https://beta.example/probe.png", "cpt": "image"},
-            {"frameUrl": "https://reader.example.invalid/page",
+            {"frameUrl": "https://reader.test/page",
              "url": "https://near-beta.example/probe.png", "cpt": "image"},
             {"frameUrl": "https://beta.example/page",
              "url": "https://beta.example/probe.png", "cpt": "image"},
@@ -76,6 +76,54 @@ class DefaultRuleProbeTests(unittest.TestCase):
              "url": "https://near-beta.example/probe.png", "cpt": "image"},
         ])
         self.assertEqual({r["cpt"] for r in rows}, {"image", "script"})
+
+    def test_exception_challenge_expected_party_contexts_and_guard(self):
+        source_lines = [
+            "@@||a.example^$script,1p",
+            "@@||b.example^$script,third-party",
+            "@@||c.example^",
+            "@@||d.example^$~third-party",
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "selected.xpi"
+            with ZipFile(source, "w") as z:
+                z.writestr(
+                    "assets/assets.dev.json",
+                    json.dumps({"selected": {
+                        "contentURL": "assets/ublock/filters.min.txt"
+                    }}),
+                )
+                z.writestr(
+                    "assets/ublock/filters.min.txt", "\n".join(source_lines),
+                )
+            with ZipFile(source) as z:
+                requests, meta = probes.build_probes(
+                    z, shard_index=0, shard_count=1,
+                    rule_family="exception",
+                    selected_keys=["selected"], exception_challenge=True,
+                )
+                self.assertEqual(meta["exception_challenge"], True)
+                self.assertEqual(meta["expected_explicit_allow_by_origin"], [
+                    False, True, True, False, True, True, False, True,
+                ])
+                self.assertEqual(len(requests), 16)
+                self.assertEqual(requests[0]["frameUrl"], "https://reader.test/page")
+                self.assertEqual(
+                    requests[1]["url"],
+                    "https://mb-exception-control-00000.test/probe.js",
+                )
+                self.assertEqual(requests[2]["frameUrl"], "https://a.example/page")
+                with self.assertRaisesRegex(ValueError, "needs selected"):
+                    probes.build_probes(
+                        z, shard_index=0, shard_count=1,
+                        rule_family="exception", exception_challenge=True,
+                    )
+                with self.assertRaisesRegex(ValueError, "needs selected"):
+                    probes.build_probes(
+                        z, shard_index=0, shard_count=1,
+                        rule_family="all", selected_keys=["selected"],
+                        exception_challenge=True,
+                    )
 
     def test_party_restricted_default_rules_and_exception_family_shards(self):
         rules = [
@@ -127,10 +175,10 @@ class DefaultRuleProbeTests(unittest.TestCase):
         self.assertEqual(
             exception_rows[0:2],
             [
-                {"frameUrl": "https://reader.example.invalid/page",
+                {"frameUrl": "https://reader.test/page",
                  "url": "https://delta.example/probe.json",
                  "cpt": "xmlhttprequest"},
-                {"frameUrl": "https://reader.example.invalid/page",
+                {"frameUrl": "https://reader.test/page",
                  "url": "https://near-delta.example/probe.json",
                  "cpt": "xmlhttprequest"},
             ],

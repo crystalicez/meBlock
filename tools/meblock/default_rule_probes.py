@@ -171,7 +171,7 @@ def bundled_asset_fingerprint(build):
 
 
 def build_probes(archive, *, shard_index, shard_count, max_requests=MAX_REQUESTS,
-                 selected_keys=None, rule_family="all"):
+                 selected_keys=None, rule_family="all", exception_challenge=False):
     if type(shard_count) is not int or shard_count < 1:
         raise ValueError("Shard count must be positive")
     if type(shard_index) is not int or not 0 <= shard_index < shard_count:
@@ -180,6 +180,8 @@ def build_probes(archive, *, shard_index, shard_count, max_requests=MAX_REQUESTS
         raise ValueError("Request cap must be at least four")
     if rule_family not in ("all", "exception", "blocking"):
         raise ValueError("Unknown rule family")
+    if exception_challenge and (rule_family != "exception" or selected_keys is None):
+        raise ValueError("Exception challenge needs selected default exception rules")
     all_rules, coverage = collect_bundled_rules(archive, selected_keys=selected_keys)
     exception_count = sum(rule.startswith("@@") for rule in all_rules)
     if rule_family == "exception":
@@ -194,7 +196,8 @@ def build_probes(archive, *, shard_index, shard_count, max_requests=MAX_REQUESTS
     if len(shard) * 4 > max_requests:
         raise ValueError("Selected shard exceeds request cap; use more shards")
     rows = []
-    for rule in shard:
+    expected_allow = []
+    for index, rule in enumerate(shard):
         parsed = recognized_rule(rule)
         if parsed is None:
             raise AssertionError("Eligible rule was not recognized")
@@ -204,12 +207,23 @@ def build_probes(archive, *, shard_index, shard_count, max_requests=MAX_REQUESTS
                               None)
         request_type, filename = REQUEST_TYPES[request_option]
         labels = host.split(".")
-        near_miss = "near-" + labels[0] + "." + ".".join(labels[1:])
+        near_miss = (
+            f"mb-exception-control-{index:05d}.test"
+            if exception_challenge else
+            "near-" + labels[0] + "." + ".".join(labels[1:])
+        )
         positive = f"https://{host}/{filename}"
         negative = f"https://{near_miss}/{filename}"
-        for frame in ("https://reader.example.invalid/page", f"https://{host}/page"):
+        for frame in ("https://reader.test/page", f"https://{host}/page"):
             rows.append({"frameUrl": frame, "url": positive, "cpt": request_type})
             rows.append({"frameUrl": frame, "url": negative, "cpt": request_type})
+        if exception_challenge:
+            party_options = set(tokens) & PARTY_OPTIONS
+            party = next(iter(party_options), None)
+            expected_allow.extend((
+                party not in ("1p", "~third-party"),
+                party not in ("third-party", "3p"),
+            ))
     return valid_rows(rows), {
         "schema": "meblock-default-rule-probes-v1",
         **coverage,
@@ -223,14 +237,21 @@ def build_probes(archive, *, shard_index, shard_count, max_requests=MAX_REQUESTS
         "positive_requests": len(shard) * 2,
         "near_miss_requests": len(shard) * 2,
         "request_count": len(rows),
+        **({
+            "exception_challenge": True,
+            "expected_explicit_allow_by_origin": expected_allow,
+        } if exception_challenge else {}),
         "behavior_scope": (
-            "Bundled public simple host-anchored candidates and a restricted "
-            "subset of request-type/party modifiers only. Some rules can be "
-            "shadowed or have a false positive from another rule. Each candidate "
-            "uses external-reader and same-host document origins; their near-"
-            "miss requests need not have identical party context. Differential "
-            "decisions/modifiers, NOT isolated rule attribution or an exhaustive "
-            "precedence oracle."
+            "Correctness-only selected default exceptions, with distinct "
+            "reserved .test controls and disposable synthetic blockers; NOT an "
+            "unmodified default-list baseline or unique filter attribution."
+            if exception_challenge else
+            "Bundled public simple host-anchored candidates and restricted "
+            "request-type/party modifiers only. Some rules can be shadowed "
+            "or have a false positive from another rule. Each candidate "
+            "uses external-reader and same-host origins, with near-miss "
+            "requests that need not have identical party contexts. Differential "
+            "decisions/modifiers, NOT isolated rule attribution."
         ),
     }
 
@@ -244,6 +265,10 @@ def main(argv=None):
     parser.add_argument(
         "--family", choices=("all", "exception", "blocking"), default="all",
         help="Create disjoint shards within one selected default rule family",
+    )
+    parser.add_argument(
+        "--exception-challenge", action="store_true",
+        help="Make an ignored per-case correctness corpus for explicit blocker challenge",
     )
     parser.add_argument(
         "--selected-run", type=Path,
@@ -266,6 +291,7 @@ def main(argv=None):
             rows, coverage = build_probes(
                 archive, shard_index=args.shard_index, shard_count=args.shards,
                 selected_keys=selected, rule_family=args.family,
+                exception_challenge=args.exception_challenge,
             )
         output.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(rows, separators=(",", ":"), ensure_ascii=False) + "\n"

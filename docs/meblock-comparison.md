@@ -45,6 +45,78 @@ python tools/meblock/compare_original.py --runs 5 --idle-sample 5
 
 Those process-wide readings are secondary diagnostics, not reliable per-extension allocation or CPU metrics.
 
+## Selected-default exception override challenge (correctness only)
+
+The **default-list benchmark remains unchanged**: use `--default-lists`
+without any injected rules for RAM/performance measurements. A separate,
+explicit `--exception-challenge` mode allows the otherwise unobservable
+selected default-list exceptions to be examined against **test-only blockers**
+inside disposable Firefox builds. It is **not** a default-only performance
+baseline.
+
+A prior real Firefox run's *selected-filter-list keys* are pinned to the
+public assets in a local XPI. Generate one locally ignored challenge corpus:
+
+```powershell
+python tools/meblock/default_rule_probes.py --addon dist/build/uBlock0.firefox.xpi --selected-run dist/build/meblock-comparison/SESSION/upstream-run-1.json --family exception --exception-challenge --shards 1 --out dist/build/meblock-exception-challenge.json
+python tools/meblock/compare_original.py --exception-challenge --dataset dist/build/meblock-exception-challenge.json --runs 2
+```
+
+Replace `SESSION` with the local ignored prior default-list Firefox session.
+The generator selects only eligible **public** hostname exception rules with
+conservative request-type and first/third-party options. Each candidate has
+four requests, with the matching public-list hostname and a distinct,
+synthetic control hostname under reserved `.test`, each from an external
+document on `reader.test` and a same-host document. A private
+manifest contains boolean expected explicit-allow contexts derived from
+the rule's option syntax, not inferred from Firefox results.
+
+The comparison script validates the corpus SHA, source asset fingerprint,
+selected-list identity and per-group shape. It then adds two synthetic
+blocking control filters **per exception candidate** to each temporary
+instrumented XPI: one blocking the matching host and one blocking the
+synthetic control host. The original enabled default filters remain present.
+The temporary blockers are never written to the source repository or used in
+`--default-lists` mode. The reports must identify this as
+`exception_challenge_correctness_only=true` with a **nonzero injected
+filter-rule count**; an attempt to combine the switches is rejected.
+
+The diagnostic explicitly counts:
+
+- Matching hosts where an expected exception produced result `2` while
+  the corresponding synthetic control host was blocked with result `1`.
+- Candidates confirmed in at least one tested context, and candidates not
+  confirmed.
+- Synthetic-host blocking controls that **failed**, with only numeric offending
+  indices, never hostnames.
+
+This is evidence of a **context-level exception override**, not unique
+attribution to a particular rule; overlapping default rules may affect the
+result. A missing override may be shadowed, disabled, or require more
+conditions. Failed synthetic-host controls are *not counted as confirmed*; if
+any fail, the report identifies partial control coverage rather than claiming
+an exhaustive pass. Both builds must still pass exact per-request
+decision/modifier and other browser correctness checks. Performance timings
+from the challenged XPIs have no optimization-acceptance meaning.
+
+**Real Firefox validation, 2026-10-20:** The pinned public exception
+corpus contained **165 eligible exceptions** and 660 request contexts.
+A two-pair / four-profile alternating upstream-meBlock correctness
+challenge used **330 synthetic blocking controls** *only in those
+disposable XPIs*. Every profile had the same 660 request decisions and
+modifier masks. **163/165 candidates** showed an observed
+context-specific override; **176/179 syntax-expected allow contexts**
+were confirmed. **329/330 reserved-host controls** were blocked;
+one unresolved control and two candidate indices remain explicitly
+unconfirmed, consistently on both builds. Replacing the original
+same-suffix near-miss control with an unrelated reserved `.test`
+hostname did **not** make the last two candidates conclusive; the
+harness records the unresolved results rather than changing expected
+outcomes to make the test pass. The verdict is always
+**CORRECTNESS-ONLY**, regardless of observed performance timings.
+A separate real `--default-lists` control verified 0 injected
+filters and unchanged decisions/modifier masks.
+
 ## Independent exception and precedence oracle (test-only fixture v6)
 
 The non-default correctness comparison injects fourteen **synthetic,

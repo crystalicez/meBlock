@@ -329,6 +329,61 @@ class CompareTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "20 measured loads"):
             runner.compare({"upstream": [source], "meblock": [target]}, DATASET)
 
+    def test_exception_challenge_controls_and_override_attribution(self):
+        # Three exceptions: first-party, third-party, and party-unrestricted.
+        rows = []
+        for index, label in enumerate(("a", "b", "c")):
+            host = label + ".example"
+            near = f"mb-exception-control-{index:05d}.test"
+            for frame in ("https://reader.test/page", "https://" + host + "/page"):
+                rows.extend([
+                    {"frameUrl": frame, "url": "https://" + host + "/probe.js",
+                     "cpt": "script"},
+                    {"frameUrl": frame, "url": "https://" + near + "/probe.js",
+                     "cpt": "script"},
+                ])
+        coverage = {
+            "exception_challenge": True,
+            "simple_host_rules_in_shard": 3,
+            "_expected_allow_by_origin": [False, True, True, False, True, True],
+        }
+        rules = runner.exception_blocking_controls(rows, coverage)
+        self.assertEqual(rules, (
+            "||a.example^", "||mb-exception-control-00000.test^",
+            "||b.example^", "||mb-exception-control-00001.test^",
+            "||c.example^", "||mb-exception-control-00002.test^",
+        ))
+        outcomes = [
+            1, 1, 2, 1,
+            2, 1, 1, 1,
+            2, 1, 2, 1,
+        ]
+        measured = runner.summarize_exception_challenge({"outcomes": outcomes}, coverage)
+        self.assertEqual(measured["candidate_rules"], 3)
+        self.assertEqual(measured["expected_override_contexts"], 4)
+        self.assertEqual(measured["confirmed_override_contexts"], 4)
+        self.assertEqual(measured["candidates_with_confirmed_override"], 3)
+        self.assertEqual(measured["blocking_negative_controls_passed"], 6)
+        self.assertEqual(measured["first_25_unconfirmed_indices"], [])
+        self.assertNotIn("example", json.dumps(measured))
+        # When the negative near-miss is explicitly allowed, the positive
+        # is NOT attributed to that candidate (even if the positive is allow).
+        outcomes[11] = 2
+        rejected = runner.summarize_exception_challenge({"outcomes": outcomes}, coverage)
+        self.assertEqual(rejected["confirmed_override_contexts"], 3)
+        self.assertEqual(rejected["blocking_negative_controls_passed"], 5)
+        self.assertEqual(rejected["first_25_control_failure_indices"], [2])
+        broken = deepcopy(rows)
+        broken[0]["frameUrl"] = "https://reader.example.invalid/page"
+        with self.assertRaisesRegex(ValueError, "Malformed exception challenge"):
+            runner.exception_blocking_controls(broken, coverage)
+        broken = deepcopy(rows)
+        broken[1]["url"] = "https://unrelated.example/probe.js"
+        with self.assertRaisesRegex(ValueError, "Malformed exception challenge"):
+            runner.exception_blocking_controls(broken, coverage)
+        with self.assertRaisesRegex(ValueError, "Incomplete exception challenge"):
+            runner.summarize_exception_challenge({"outcomes": outcomes[:-1]}, coverage)
+
     def test_default_rule_candidate_effects_detect_real_outcome_and_modifier_differences(self):
         observation = {
             "outcomes": [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -482,6 +537,22 @@ class CompareTests(unittest.TestCase):
             )
             self.assertEqual(with_family["rule_family"], "exception")
             self.assertEqual(with_family["family_rule_unique"], 1)
+            challenge = {
+                **family_manifest,
+                "selected_list_keys_sha256": "b" * 64,
+                "selected_list_count": 1,
+                "selected_without_bundled_asset_count": 0,
+                "exception_challenge": True,
+                "expected_explicit_allow_by_origin": [False, True],
+            }
+            sidecar.write_text(json.dumps(challenge), encoding="utf-8")
+            checked = runner.read_rule_derived_manifest(dataset, payload, rows, True)
+            self.assertEqual(checked["_expected_allow_by_origin"], [False, True])
+            self.assertTrue(checked["exception_challenge"])
+            challenge["expected_explicit_allow_by_origin"] = [False, 1]
+            sidecar.write_text(json.dumps(challenge), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "exception-challenge oracle"):
+                runner.read_rule_derived_manifest(dataset, payload, rows, True)
             family_manifest["eligible_blocking_rule_unique"] = 14
             sidecar.write_text(json.dumps(family_manifest), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "rule-family provenance"):
@@ -793,6 +864,44 @@ class PackageTests(unittest.TestCase):
                     archive.read("js/static-net-filtering.js"),
                 )
                 self.assertIn(b"autoUpdate: false", archive.read("js/background.js"))
+
+    def test_challenge_rules_only_enter_disposable_correctness_xpi(self):
+        with tempfile.TemporaryDirectory() as folder:
+            build = Path(folder) / "test-build"
+            (build / "assets" / "ublock").mkdir(parents=True)
+            (build / "js").mkdir()
+            (build / "manifest.json").write_text(json.dumps({
+                "browser_specific_settings": {"gecko": {"id": "fake@example.invalid"}}
+            }), encoding="utf-8")
+            (build / "background.html").write_text(
+                "<html><body></body></html>", encoding="utf-8"
+            )
+            (build / "js" / "static-net-filtering.js").write_text(
+                "export default {};", encoding="utf-8"
+            )
+            (build / "js" / "background.js").write_text(
+                "const defaults = {\n    autoUpdate: true,\n};", encoding="utf-8"
+            )
+            (build / "assets" / "ublock" / "filters.min.txt").write_text(
+                "! stock public fake list\n", encoding="utf-8"
+            )
+            archive = Path(folder) / "challenge.xpi"
+            fake_blockers = (
+                "||target.example.invalid^",
+                "||mb-exception-control-00000.test^",
+            )
+            runner.probe_package(
+                build, archive, "upstream", "http://127.0.0.1:1234",
+                "fake-secret", b"[]", include_fixture_rules=False,
+                challenge_rules=fake_blockers,
+            )
+            with ZipFile(archive) as result:
+                actual = result.read("assets/ublock/filters.min.txt").decode("utf-8")
+                self.assertIn("||target.example.invalid^", actual)
+                self.assertIn("||mb-exception-control-00000.test^", actual)
+                self.assertNotIn("mb-fixture-override", actual)
+                self.assertIn(b'"precedence_cases": []',
+                              result.read("js/meblock-probe.js"))
 
     def test_instrumented_package_tracks_fork_identity(self):
         with tempfile.TemporaryDirectory() as folder:

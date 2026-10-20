@@ -113,7 +113,7 @@ def run_build(source, assets):
 
 
 def probe_package(build, destination, role, endpoint, token, dataset_bytes,
-                  *, include_fixture_rules=True):
+                  *, include_fixture_rules=True, challenge_rules=()):
     network_engine = build / "js" / "static-net-filtering.js"
     original_engine = network_engine.read_text(encoding="utf-8")
     if "meblockEngineBufferFootprint" in original_engine:
@@ -138,9 +138,12 @@ def probe_package(build, destination, role, endpoint, token, dataset_bytes,
     core_filters = build / "assets" / "ublock" / "filters.min.txt"
     if not core_filters.is_file():
         raise RuntimeError("Built-in filter list missing for browser behavior fixture")
-    if include_fixture_rules:
+    if include_fixture_rules and challenge_rules:
+        raise ValueError("Exception challenge and generic fixture cannot be combined")
+    added = RULES if include_fixture_rules else challenge_rules
+    if added:
         with core_filters.open("a", encoding="utf-8") as stream:
-            stream.write("\n" + "\n".join(RULES) + "\n")
+            stream.write("\n" + "\n".join(added) + "\n")
     text = PROBE_PATH.read_text(encoding="utf-8")
     if "__MEBLOCK_CONFIG__" not in text:
         raise RuntimeError("Probe configuration placeholder not found")
@@ -945,7 +948,18 @@ def read_rule_derived_manifest(dataset, payload, rows, default_lists):
     allowed += (("selected_list_keys_sha256", "selected_list_count",
                  "selected_without_bundled_asset_count") if selected_digest is not None
                 else ())
-    return {key: manifest[key] for key in allowed}
+    output = {key: manifest[key] for key in allowed}
+    if "exception_challenge" in manifest:
+        expected = manifest.get("expected_explicit_allow_by_origin")
+        if (manifest["exception_challenge"] is not True or
+            family != "exception" or selected_digest is None or
+            not isinstance(expected, list) or
+            len(expected) != 2 * manifest["simple_host_rules_in_shard"] or
+            any(type(value) is not bool for value in expected)):
+            raise ValueError("Invalid exception-challenge oracle")
+        output["exception_challenge"] = True
+        output["_expected_allow_by_origin"] = expected
+    return output
 
 
 def summarize_candidate_effects(reference, candidates):
@@ -1006,6 +1020,89 @@ def summarize_candidate_effects(reference, candidates):
     }
 
 
+def exception_blocking_controls(dataset, coverage):
+    """Build only disposable blockers; never publish selected hostnames."""
+    if coverage is None or coverage.get("exception_challenge") is not True:
+        raise ValueError("Exception challenge requires a pinned exception corpus")
+    if len(dataset) != 4 * coverage["simple_host_rules_in_shard"]:
+        raise ValueError("Exception challenge corpus length changed")
+    rules = []
+    for index in range(0, len(dataset), 4):
+        external, external_near, same, same_near = dataset[index:index + 4]
+        positive = urlsplit(external["url"])
+        negative = urlsplit(external_near["url"])
+        host, near = positive.hostname, negative.hostname
+        if (
+            positive.scheme != "https" or negative.scheme != "https"
+            or not host or not near or
+            re.fullmatch(r"[a-z0-9.-]+", host) is None or
+            near != f"mb-exception-control-{index // 4:05d}.test"
+            or external["frameUrl"] != "https://reader.test/page"
+            or same["frameUrl"] != f"https://{host}/page"
+            or same_near["frameUrl"] != same["frameUrl"]
+            or external_near["frameUrl"] != external["frameUrl"]
+            or same["url"] != external["url"] or
+            same_near["url"] != external_near["url"] or
+            len({row["cpt"] for row in (external, external_near, same, same_near)}) != 1
+        ):
+            raise ValueError(f"Malformed exception challenge row group {index // 4}")
+        rules.extend((f"||{host}^", f"||{near}^"))
+    if len(rules) != len(set(rules)):
+        raise ValueError("Exception challenge contains repeated blocking controls")
+    return tuple(rules)
+
+
+def summarize_exception_challenge(sample, coverage):
+    if coverage is None or coverage.get("exception_challenge") is not True:
+        raise ValueError("No exception challenge oracle")
+    expectations = coverage["_expected_allow_by_origin"]
+    outcomes = sample.get("outcomes")
+    count = coverage["simple_host_rules_in_shard"]
+    if (not isinstance(outcomes, list) or len(outcomes) != count * 4 or
+        any(type(v) is not int or v not in (0, 1, 2) for v in outcomes)):
+        raise ValueError("Incomplete exception challenge decisions")
+    expected_total = confirmed = controls_blocked = 0
+    candidates_confirmed = 0
+    missed = []
+    controls_failed = []
+    for n in range(count):
+        base = n * 4
+        observed_for_rule = 0
+        for context in range(2):
+            yes, no = outcomes[base + context * 2:base + context * 2 + 2]
+            if no == 1:
+                controls_blocked += 1
+            else:
+                controls_failed.append(n)
+            should_allow = expectations[n * 2 + context]
+            if should_allow:
+                expected_total += 1
+                if yes == 2 and no == 1:
+                    confirmed += 1
+                    observed_for_rule += 1
+                else:
+                    missed.append(n)
+        candidates_confirmed += int(observed_for_rule > 0)
+    return {
+        "candidate_rules": count,
+        "expected_override_contexts": expected_total,
+        "confirmed_override_contexts": confirmed,
+        "candidates_with_confirmed_override": candidates_confirmed,
+        "unconfirmed_candidate_count": count - candidates_confirmed,
+        "blocking_negative_controls_passed": controls_blocked,
+        "blocking_negative_controls_total": count * 2,
+        "first_25_unconfirmed_indices": sorted(set(missed))[:25],
+        "first_25_control_failure_indices": sorted(set(controls_failed))[:25],
+        "scope": (
+            "Pinned public default exception candidates plus test-only per-host blockers. "
+            "A positive explicit-allow decision against a blocked near-miss is an "
+            "observed override in this context, not unique per-rule attribution. "
+            "Unconfirmed outcomes can reflect absent lists, disabled rules, "
+            "other precedence, or probe-context mismatch. Never performance data."
+        ),
+    }
+
+
 def verify_pinned_selection(data, derived_coverage):
     if derived_coverage is None or "selected_list_keys_sha256" not in derived_coverage:
         return
@@ -1032,6 +1129,10 @@ def main():
     p.add_argument("--firefox", type=Path, default=Path(r"C:\Program Files\Mozilla Firefox\firefox.exe"))
     p.add_argument("--build-only", action="store_true")
     p.add_argument(
+        "--exception-challenge", action="store_true",
+        help="Correctness-only selected default exceptions versus temporary blockers; not a performance baseline",
+    )
+    p.add_argument(
         "--default-lists", action="store_true",
         help="Benchmark installed default lists only; do not inject test filter rules",
     )
@@ -1039,14 +1140,23 @@ def main():
     args = p.parse_args()
     if args.runs < 1 or args.timeout < 5 or args.idle_sample < 0:
         p.error("Invalid runs, timeout, or sample duration")
+    if args.default_lists and args.exception_challenge:
+        p.error("Exception challenge must be isolated from --default-lists baseline")
     if not args.firefox.is_file() and not args.build_only:
         p.error("Firefox binary not found")
     dirty_paths = git("status", "--porcelain")
     raw = args.dataset.read_bytes()
     dataset = valid_rows(json.loads(raw))
     derived_coverage = read_rule_derived_manifest(
-        args.dataset, raw, dataset, args.default_lists
+        args.dataset, raw, dataset, args.default_lists or args.exception_challenge
     )
+    challenge_rules = (
+        exception_blocking_controls(dataset, derived_coverage)
+        if args.exception_challenge else ()
+    )
+    if (not args.exception_challenge and derived_coverage is not None and
+        derived_coverage.get("exception_challenge")):
+        p.error("Exception challenge corpus requires --exception-challenge")
     hashes = {role: git("rev-parse", ref) for role, ref in (
         ("upstream", args.upstream_ref), ("meblock", args.meblock_ref)
     )}
@@ -1067,7 +1177,10 @@ def main():
         "status": "incomplete", "session": str(session_dir),
         "refs": hashes, "assets": assets_hashes,
         "dataset_sha256": hash_bytes(raw), "dataset_count": len(dataset),
-        "rule_derived_probe_coverage": derived_coverage,
+        "rule_derived_probe_coverage": (
+            {k: v for k, v in derived_coverage.items() if not k.startswith("_")}
+            if derived_coverage is not None else None
+        ),
         "fixture_version": FIXTURE_VERSION,
         "harness_files_sha256": {
             name: hash_file(Path(__file__).with_name(name))
@@ -1079,7 +1192,11 @@ def main():
         },
         "runs_per_build": args.runs, "steps": [], "test_only_probe": True,
         "default_enabled_lists_only": args.default_lists,
-        "injected_filter_rules": 0 if args.default_lists else len(RULES),
+        "exception_challenge_correctness_only": args.exception_challenge,
+        "injected_filter_rules": (
+            len(challenge_rules) if args.exception_challenge else
+            0 if args.default_lists else len(RULES)
+        ),
         "working_tree_dirty": bool(dirty_paths),
         "note": "Both source snapshots are exported from resolved commits, not the working tree.",
     }
@@ -1104,7 +1221,8 @@ def main():
             xpi = session_dir / role / "instrumented.xpi"
             packages[role] = probe_package(
                 built, xpi, role, endpoint, state.token, raw,
-                include_fixture_rules=not args.default_lists,
+                include_fixture_rules=not (args.default_lists or args.exception_challenge),
+                challenge_rules=challenge_rules,
             )
             builds[role] = xpi
             metadata["steps"].append(f"{role} built and test probe injected")
@@ -1126,7 +1244,7 @@ def main():
                     builds[role], role, state, driver_path,
                     args.firefox, args.timeout, args.idle_sample, endpoint,
                     packages[role]["addon_id"],
-                    default_lists=args.default_lists,
+                    default_lists=args.default_lists or args.exception_challenge,
                 )
                 data[role].append(result)
                 print(json.dumps({
@@ -1139,8 +1257,34 @@ def main():
         verify_pinned_selection(data, derived_coverage)
         metadata["comparison"] = compare(
             data, dataset, identical_build=metadata["build_delta"]["files_different"] == 0,
-            default_lists=args.default_lists,
+            default_lists=args.default_lists or args.exception_challenge,
         )
+        if args.exception_challenge:
+            metadata["comparison"]["default_enabled_lists_only"] = False
+            metadata["comparison"]["injected_filter_rules"] = len(challenge_rules)
+            checks = {
+                role: [
+                    summarize_exception_challenge(result, derived_coverage)
+                    for result in data[role]
+                ] for role in ROLES
+            }
+            metadata["comparison"]["exception_challenge"] = checks
+            metadata["comparison"]["exception_challenge_all_controls_passed"] = all(
+                item["blocking_negative_controls_passed"] ==
+                item["blocking_negative_controls_total"]
+                for side in checks.values() for item in side
+            )
+            metadata["comparison"]["exception_challenge_scope"] = (
+                "Correctness diagnostic only: challenge blockers were injected into "
+                "temporary builds; this is NOT the unmodified default-list baseline. "
+                "A non-blocked negative control invalidates only that candidate's "
+                "override attribution, never silently counts it as confirmed."
+            )
+            if not metadata["comparison"]["verdict"].startswith("FAIL"):
+                metadata["comparison"]["verdict"] = (
+                    "CORRECTNESS-ONLY: selected default exceptions challenged with "
+                    "disposable blocker controls; timing is not an optimization signal"
+                )
         if derived_coverage is not None:
             metadata["comparison"]["rule_derived_observed_effects"] = (
                 summarize_candidate_effects(
