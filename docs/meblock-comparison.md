@@ -101,19 +101,19 @@ from the challenged XPIs have no optimization-acceptance meaning.
 
 **Real Firefox validation, 2026-10-20:** The pinned public exception
 corpus contained **165 eligible exceptions** and 660 request contexts.
-A two-pair / four-profile alternating upstream-meBlock correctness
-challenge used **330 synthetic blocking controls** *only in those
-disposable XPIs*. Every profile had the same 660 request decisions and
-modifier masks. **163/165 candidates** showed an observed
-context-specific override; **176/179 syntax-expected allow contexts**
-were confirmed. **329/330 reserved-host controls** were blocked;
-one unresolved control and two candidate indices remain explicitly
-unconfirmed, consistently on both builds. Replacing the original
-same-suffix near-miss control with an unrelated reserved `.test`
-hostname did **not** make the last two candidates conclusive; the
-harness records the unresolved results rather than changing expected
-outcomes to make the test pass. The verdict is always
-**CORRECTNESS-ONLY**, regardless of observed performance timings.
+Two alternating A/B pairs / four disposable Firefox profiles used
+**330 synthetic blocking controls** *only in correctness XPIs*. Each
+request's matching host and synthetic control host now use **equivalent
+first-party or third-party document-origin relationships**, rather than
+reusing the matching host's first-party origin for its control.
+Every profile agreed on all 660 request decisions and modifier masks.
+**164/165 candidates** showed context-specific overrides;
+**177/179 syntax-expected allow contexts** were confirmed, and
+**330/330 reserved-host blocking controls** were blocked. One
+candidate (numeric index only in private evidence) remains
+unconfirmed in its two expected contexts, identically on both builds;
+the harness does not rewrite expected outcomes to make it pass.
+Verdict **CORRECTNESS-ONLY**, not an optimization result.
 A separate real `--default-lists` control verified 0 injected
 filters and unchanged decisions/modifier masks.
 

@@ -113,6 +113,10 @@ class DefaultRuleProbeTests(unittest.TestCase):
                     "https://mb-exception-control-00000.test/probe.js",
                 )
                 self.assertEqual(requests[2]["frameUrl"], "https://a.example/page")
+                self.assertEqual(
+                    requests[3]["frameUrl"],
+                    "https://mb-exception-control-00000.test/page",
+                )
                 with self.assertRaisesRegex(ValueError, "needs selected"):
                     probes.build_probes(
                         z, shard_index=0, shard_count=1,

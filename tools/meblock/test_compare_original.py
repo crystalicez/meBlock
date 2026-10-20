@@ -336,10 +336,14 @@ class CompareTests(unittest.TestCase):
             host = label + ".example"
             near = f"mb-exception-control-{index:05d}.test"
             for frame in ("https://reader.test/page", "https://" + host + "/page"):
+                near_frame = (
+                    "https://" + near + "/page"
+                    if frame != "https://reader.test/page" else frame
+                )
                 rows.extend([
                     {"frameUrl": frame, "url": "https://" + host + "/probe.js",
                      "cpt": "script"},
-                    {"frameUrl": frame, "url": "https://" + near + "/probe.js",
+                    {"frameUrl": near_frame, "url": "https://" + near + "/probe.js",
                      "cpt": "script"},
                 ])
         coverage = {
@@ -375,6 +379,12 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(rejected["first_25_control_failure_indices"], [2])
         broken = deepcopy(rows)
         broken[0]["frameUrl"] = "https://reader.example.invalid/page"
+        with self.assertRaisesRegex(ValueError, "Malformed exception challenge"):
+            runner.exception_blocking_controls(broken, coverage)
+        # A control request must not inherit the positive host's first-party
+        # document; this previously made one reserved-host control untestable.
+        broken = deepcopy(rows)
+        broken[3]["frameUrl"] = "https://a.example/page"
         with self.assertRaisesRegex(ValueError, "Malformed exception challenge"):
             runner.exception_blocking_controls(broken, coverage)
         broken = deepcopy(rows)

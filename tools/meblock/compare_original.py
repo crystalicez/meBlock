@@ -1039,7 +1039,7 @@ def exception_blocking_controls(dataset, coverage):
             near != f"mb-exception-control-{index // 4:05d}.test"
             or external["frameUrl"] != "https://reader.test/page"
             or same["frameUrl"] != f"https://{host}/page"
-            or same_near["frameUrl"] != same["frameUrl"]
+            or same_near["frameUrl"] != f"https://{near}/page"
             or external_near["frameUrl"] != external["frameUrl"]
             or same["url"] != external["url"] or
             same_near["url"] != external_near["url"] or

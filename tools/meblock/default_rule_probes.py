@@ -216,7 +216,14 @@ def build_probes(archive, *, shard_index, shard_count, max_requests=MAX_REQUESTS
         negative = f"https://{near_miss}/{filename}"
         for frame in ("https://reader.test/page", f"https://{host}/page"):
             rows.append({"frameUrl": frame, "url": positive, "cpt": request_type})
-            rows.append({"frameUrl": frame, "url": negative, "cpt": request_type})
+            near_frame = (
+                f"https://{near_miss}/page"
+                if exception_challenge and frame == f"https://{host}/page"
+                else frame
+            )
+            rows.append({
+                "frameUrl": near_frame, "url": negative, "cpt": request_type,
+            })
         if exception_challenge:
             party_options = set(tokens) & PARTY_OPTIONS
             party = next(iter(party_options), None)
