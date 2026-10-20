@@ -7,8 +7,9 @@ import unittest
 from unittest.mock import patch
 from zipfile import ZipFile
 
+from benchmark_firefox import collect_idle
 from capture_memory import (
-    BUILT_IN_LIST, extension_process_explicit_mib,
+    BUILT_IN_LIST, capture, extension_process_explicit_mib,
     extension_process_explicit_summary, synthetic_xpi,
     source_filter_assets_sha256,
     validated_engine_state, wait_for_stable_engine,
@@ -16,6 +17,46 @@ from capture_memory import (
 
 
 class CaptureMemoryTests(unittest.TestCase):
+    def test_cpu_collector_flags_process_churn_that_would_undercount_cpu(self):
+        samples = [
+            {17: {"rss_bytes": 1024, "cpu_seconds": 1.0, "create_time": 10}},
+            {
+                17: {"rss_bytes": 1024, "cpu_seconds": 1.4, "create_time": 10},
+                19: {"rss_bytes": 2048, "cpu_seconds": 0.2, "create_time": 11},
+            },
+        ]
+        with (patch("benchmark_firefox.firefox_process_snapshot", side_effect=samples),
+              patch("benchmark_firefox.time.perf_counter", side_effect=[0, 0, 0.6]),
+              patch("benchmark_firefox.time.sleep")):
+            result = collect_idle(15, 0.5)
+        self.assertEqual(result["cpu_seconds_total"], 0.4)
+        self.assertEqual(result["firefox_process_count_peak"], 2)
+        self.assertTrue(result["process_pid_churn_observed"])
+        self.assertEqual(result["sample_count"], 2)
+
+    def test_cpu_collector_detects_reused_pid_with_new_process_identity(self):
+        samples = [
+            {17: {"rss_bytes": 1024, "cpu_seconds": 1.0, "create_time": 10}},
+            {17: {"rss_bytes": 1024, "cpu_seconds": 2.0, "create_time": 11}},
+        ]
+        with (patch("benchmark_firefox.firefox_process_snapshot", side_effect=samples),
+              patch("benchmark_firefox.time.perf_counter", side_effect=[0, 0, 0.6]),
+              patch("benchmark_firefox.time.sleep")):
+            result = collect_idle(15, 0.5)
+        self.assertTrue(result["process_pid_churn_observed"])
+        self.assertEqual(result["cpu_seconds_total"], 0)
+
+    def test_nonfinite_measurement_times_rejected_before_firefox(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=str(value)):
+                with self.assertRaisesRegex(ValueError, "finite and nonnegative"):
+                    capture(Path("unused.xpi"), Path("unused-firefox"), value)
+                with self.assertRaisesRegex(ValueError, "finite and nonnegative"):
+                    capture(Path("unused.xpi"), Path("unused-firefox"), 2,
+                            sample_spacing=value)
+                with self.assertRaisesRegex(ValueError, "positive and finite"):
+                    collect_idle(17, value)
+
     def test_disposable_package_preserves_source_and_injects_only_fixture_rules(self):
         with tempfile.TemporaryDirectory() as root:
             original = Path(root) / "original.xpi"

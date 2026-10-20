@@ -72,6 +72,74 @@ def paired_delta_statistics(deltas, *, resamples=4000, seed=20261019):
     }
 
 
+def summarize_idle_cpu(rows, *, identical_xpi_control):
+    readings = [data.get("idle_firefox_cpu") for _, _, data in rows]
+    if all(reading is None for reading in readings):
+        return None
+    keys = {
+        "measurement_seconds", "cpu_percent_one_core_equivalent",
+        "rss_mb_median_sum", "rss_mb_peak_sum", "firefox_process_count_peak",
+        "cpu_seconds_total", "sample_count", "process_pid_churn_observed",
+    }
+    for (_, _, data), reading in zip(rows, readings):
+        if not isinstance(reading, dict) or set(reading) != keys:
+            raise ValueError("Incomplete Firefox idle CPU sample")
+        elapsed = reading["measurement_seconds"]
+        consumed = reading["cpu_seconds_total"]
+        percent = reading["cpu_percent_one_core_equivalent"]
+        if (
+            any(type(value) not in (int, float) or not math.isfinite(value) or value < 0
+                for value in (elapsed, consumed, percent,
+                              reading["rss_mb_median_sum"], reading["rss_mb_peak_sum"]))
+            or elapsed <= 0
+            or elapsed < 0.95 * data["settle_seconds_after_filter_readiness"]
+            or elapsed > data["settle_seconds_after_filter_readiness"] * 1.05 + 1
+            or reading["rss_mb_peak_sum"] < reading["rss_mb_median_sum"]
+            or type(reading["sample_count"]) is not int
+            or reading["sample_count"] < 2
+            or reading["sample_count"] > elapsed * 50 + 3
+            or type(reading["firefox_process_count_peak"]) is not int
+            or reading["firefox_process_count_peak"] < 1
+            or type(reading["process_pid_churn_observed"]) is not bool
+            or abs(percent - 100 * consumed / elapsed) > 0.25
+        ):
+            raise ValueError("Invalid Firefox idle CPU sample")
+    paired = {}
+    for index, condition, data in rows:
+        paired.setdefault(index, {})[condition] = data["idle_firefox_cpu"][
+            "cpu_percent_one_core_equivalent"
+        ]
+    deltas = [
+        round(pair["synthetic"] - pair["stock"], 4)
+        for _, pair in sorted(paired.items())
+    ]
+    maximum_churn = any(reading["process_pid_churn_observed"] for reading in readings)
+    minimum_seconds = min(reading["measurement_seconds"] for reading in readings)
+    minimum_pairs = 3 if identical_xpi_control else 6
+    usable = len(deltas) >= minimum_pairs and minimum_seconds >= 300 and not maximum_churn
+    return {
+        "scope": (
+            "CPU time of all observed Firefox descendants of the disposable "
+            "geckodriver, divided by wall time; 100 percent is one core. "
+            "Not isolated addon CPU, real page CPU, or evidence of speedup."
+        ),
+        "pairs": len(deltas),
+        "minimum_observed_seconds": round(minimum_seconds, 3),
+        "process_pid_churn_observed": maximum_churn,
+        "paired_deltas_one_core_percent": deltas,
+        "median_paired_delta_one_core_percent": round(statistics.median(deltas), 4),
+        "max_absolute_paired_delta_one_core_percent": round(max(map(abs, deltas)), 4),
+        "screening_gate_passed": usable,
+        "verdict": (
+            "CONTROL: same-XPI Firefox process CPU noise only"
+            if usable and identical_xpi_control else
+            "SCREENING ONLY: Firefox-wide paired idle CPU, not addon attribution"
+            if usable else
+            "EXPLORATORY: insufficient duration, pairs, or stable process identity"
+        ),
+    }
+
+
 def summarize_pairs(rows, mode="rule-count"):
     if mode not in ("rule-count", "build"):
         raise ValueError("Unknown baseline comparison mode")
@@ -175,6 +243,9 @@ def summarize_pairs(rows, mode="rule-count"):
         mode == "build" and source_inputs["stock"] == source_inputs["synthetic"]
     )
     uncertainty = paired_delta_statistics(deltas)
+    idle_cpu = summarize_idle_cpu(
+        rows, identical_xpi_control=identical_xpi_control
+    )
     null_noise = None
     if identical_xpi_control:
         magnitudes = [abs(row["delta_mib"]) for row in deltas]
@@ -215,6 +286,7 @@ def summarize_pairs(rows, mode="rule-count"):
         "comparison_mode": mode,
         "identical_xpi_negative_control": identical_xpi_control,
         "paired_uncertainty": uncertainty,
+        "idle_firefox_cpu": idle_cpu,
         "same_xpi_process_noise_floor": null_noise,
         "condition_labels": {
             "stock": "control-A" if identical_xpi_control else "baseline",
@@ -242,6 +314,10 @@ def main(argv=None):
     parser.add_argument("--firefox", type=Path, default=Path(r"C:\Program Files\Mozilla Firefox\firefox.exe"))
     parser.add_argument("--pairs", type=int, default=3)
     parser.add_argument("--settle-seconds", type=float, default=300)
+    parser.add_argument(
+        "--measure-idle-cpu", action="store_true",
+        help="Sample Firefox-wide CPU during post-readiness settling; not addon CPU",
+    )
     parser.add_argument("--base-network-filters", type=int)
     parser.add_argument(
         "--default-lists", action="store_true",
@@ -253,10 +329,13 @@ def main(argv=None):
     parser.add_argument("--synthetic-rule-mix", choices=RULE_MIXES,
                         default="hostname")
     args = parser.parse_args(argv)
-    if (args.pairs < 1 or args.settle_seconds < 0 or
+    if (args.pairs < 1 or not math.isfinite(args.settle_seconds)
+        or args.settle_seconds < 0 or
         args.base_network_filters is not None and args.base_network_filters < 1 or
         args.extra_synthetic_hostnames < 0):
         parser.error("Invalid number of pairs, time or filter count")
+    if args.measure_idle_cpu and args.settle_seconds < 1:
+        parser.error("CPU baseline requires at least one second after filter readiness")
     if args.default_lists:
         if (args.candidate_addon is None or args.extra_synthetic_hostnames != 0
             or args.base_network_filters is not None):
@@ -295,6 +374,7 @@ def main(argv=None):
                 addon, args.firefox, args.settle_seconds,
                 extra_rules=extra, samples=1, expected_network_filters=expected,
                 offline=True, rule_mix=args.synthetic_rule_mix,
+                measure_idle_cpu=args.measure_idle_cpu,
             )
             observed_network = data["filter_engine"]["network_filters"]
             if type(observed_network) is not int or observed_network < 1:

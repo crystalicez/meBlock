@@ -391,24 +391,32 @@ addition to static network matcher speed. After engine readiness and a
 successful browser-behavior check, each fresh Firefox profile opens the same
 fixture for **two warm-ups and 20 measured navigations**. It reads
 `PerformanceNavigationTiming.loadEventEnd` and
-`domContentLoadedEventEnd` inside Firefox. This avoids including Selenium
-command transit time in the timed value. The runner checks the page's blocked
-script, image, frame, CSS and scriptlet outcomes after **every** navigation.
-Missing timing entries, incorrect page behavior, incomplete sample sets,
-non-finite values and reversed timing milestones fail the run.
+`domContentLoadedEventEnd` inside Firefox. It also reads the duration
+of exactly one `/test-allowed.js` `PerformanceResourceTiming` entry per
+navigation. The fixture server sends `Cache-Control: no-store` and the
+page-side assertion requires the script to execute. These values exclude
+Selenium command transit time. The runner checks blocked script, image,
+frame, CSS and scriptlet effects after **every** navigation. Missing or
+duplicate target resource entries, zero/non-finite timing, wrong page
+behavior, incomplete samples or reversed milestones reject the run.
 
-Each run preserves only numeric navigation milestones, not page URLs. The
-comparison recomputes median, **nearest-rank p95** and observed range from
-all 20 samples per run, then reports the median and range of per-run p95
-under `comparison.fixture_navigation`. Use several independent,
-alternating Firefox profiles to compare two versions. One run is diagnostic,
-not a performance verdict. A same-build comparison is a negative control.
+The report retains only numeric timings, never resource URLs. It computes
+nearest-rank p95 from the 20 browser-observed local resource durations and
+navigation milestones, then reports per-run p95 and observed spread under
+`comparison.fixture_navigation`. Each profile contributes one run; use
+independent, alternating Firefox profiles for comparisons. A same-build
+comparison is a negative control, not a speedup claim. The without-addon
+Firefox control also executes 20 measured navigations with the inverse
+blocking expectations, so the resource instrumentation itself must work
+without an installed extension. One real upstream/meBlock fixture-v8 pair
+and its unfiltered control passed this measurement on 2026-10-20.
 
-This is **local fixture page-load latency**, which includes browser,
-extension and controlled loopback server work. It is *not* actual request
-handler p95, public-website latency, a representative user browsing
-distribution or a claim of faster page loads. Real-site traces and
-request-level tail latency are still separate acceptance gates.
+These are **controlled loopback document loads and script fetches**,
+including browser, extension and test HTTP server work. A local resource
+fetch duration is a browser-observed request measurement, not static-filter
+matcher CPU time, public-website request p95, a representative browsing
+distribution, or addon-exclusive CPU. Representative real-page and
+request-level latency remain separate optimization acceptance gates.
 
 ## Fast network-engine buffer screening
 

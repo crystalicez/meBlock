@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import gzip
 import hashlib
 import json
+import math
 from pathlib import Path
 import time
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
@@ -18,7 +19,7 @@ from selenium import webdriver
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.firefox.service import Service
 
-from benchmark_firefox import geckodriver_path
+from benchmark_firefox import collect_idle, geckodriver_path
 from analyze_memory import MAX_DECOMPRESSED_BYTES, subtree_summary
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -286,7 +287,12 @@ def extension_process_explicit_mib(reports):
 
 def capture(addon, firefox, settle_seconds, extra_rules=0, samples=1,
             expected_network_filters=None, sample_spacing=60, offline=False,
-            rule_mix="hostname"):
+            rule_mix="hostname", measure_idle_cpu=False):
+    if (not math.isfinite(settle_seconds) or settle_seconds < 0
+        or not math.isfinite(sample_spacing) or sample_spacing < 0):
+        raise ValueError("Firefox memory sampling times must be finite and nonnegative")
+    if measure_idle_cpu and settle_seconds < 1:
+        raise ValueError("Idle CPU measurement requires at least one second after readiness")
     PRIVATE_DIR.mkdir(parents=True, exist_ok=True)
     if not addon.is_file():
         raise FileNotFoundError("Test-only addon XPI not found")
@@ -348,7 +354,12 @@ def capture(addon, firefox, settle_seconds, extra_rules=0, samples=1,
             f"{state['cosmetic_filters']} cosmetic filters; "
             f"waiting {settle_seconds:g}s from readiness", flush=True
         )
-        time.sleep(settle_seconds)
+        idle_cpu = (
+            collect_idle(browser.service.process.pid, settle_seconds)
+            if measure_idle_cpu else None
+        )
+        if idle_cpu is None:
+            time.sleep(settle_seconds)
         browser.set_script_timeout(180)
         browser.set_context("chrome")
         captured = []
@@ -401,6 +412,7 @@ def capture(addon, firefox, settle_seconds, extra_rules=0, samples=1,
             "test_package_sha256": test_sha256,
             "firefox_version": browser.capabilities.get("browserVersion"),
             "settle_seconds_after_filter_readiness": settle_seconds,
+            "idle_firefox_cpu": idle_cpu,
             "filter_engine": state,
             "report_count": len(captured),
             "reports": captured,
@@ -414,6 +426,7 @@ def capture(addon, firefox, settle_seconds, extra_rules=0, samples=1,
             "source_filter_assets_sha256": public_assets_sha256,
             "test_package_sha256": test_sha256,
             "settle_seconds_after_filter_readiness": settle_seconds,
+            "idle_firefox_cpu": idle_cpu,
             "synthetic_rule_mix": rule_mix if extra_rules else "none",
         }
     finally:
@@ -439,7 +452,8 @@ def main(argv=None):
     parser.add_argument("--offline", action="store_true", help="Disable external network in disposable Firefox before loading the addon")
     parser.add_argument("--expected-network-filters", type=int)
     args = parser.parse_args(argv)
-    if (args.settle_seconds < 0 or args.sample_spacing < 0
+    if (not math.isfinite(args.settle_seconds) or args.settle_seconds < 0
+        or not math.isfinite(args.sample_spacing) or args.sample_spacing < 0
         or args.runs < 1 or args.samples < 1 or args.extra_synthetic_hostnames < 0
         or args.expected_network_filters is not None and args.expected_network_filters < 1):
         parser.error("Invalid runs, samples, filter counts or sample timing")

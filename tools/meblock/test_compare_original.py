@@ -8,6 +8,7 @@ import tempfile
 import threading
 import urllib.request
 import unittest
+from unittest.mock import patch
 from zipfile import ZipFile
 
 HERE = Path(__file__).resolve().parent
@@ -286,6 +287,49 @@ class CompareTests(unittest.TestCase):
                 {"field": "page", "error": "unexpected or missing fields"}
             ])
 
+    def test_unfiltered_browser_control_checks_same_local_resource_workload(self):
+        class Browser:
+            def __init__(self):
+                self.current_url = ""
+                self.visited = []
+                self.closed = False
+
+            def get(self, url):
+                self.current_url = url
+                self.visited.append(url)
+
+            def execute_script(self, script):
+                if script == runner.OBSERVATION_SCRIPT:
+                    return deepcopy(WITHOUT_ADDON)
+                if script == runner.NAVIGATION_SCRIPT:
+                    index = len(self.visited) - 3
+                    return {
+                        "load_event_end_ms": 20.0 + index,
+                        "dom_content_loaded_end_ms": 10.0 + index,
+                        "allowed_script_resource_duration_ms": 2.0 + index,
+                        "navigation_type": "navigate",
+                    }
+                raise AssertionError("Unexpected unfiltered Firefox script")
+
+            def quit(self):
+                self.closed = True
+
+        browser = Browser()
+        with patch.object(runner.webdriver, "Firefox", return_value=browser):
+            control = runner.test_without_addon(
+                "http://127.0.0.1:8000", None, Path("firefox.exe")
+            )
+        self.assertTrue(browser.closed)
+        self.assertEqual(control["page"], WITHOUT_ADDON)
+        self.assertEqual(control["parameters"], PARAMETERS_WITHOUT_ADDON)
+        self.assertEqual(len(control["navigation"]), 20)
+        self.assertEqual(
+            runner.summarize_fixture_navigation(control["navigation"])[
+                "p95_allowed_script_resource_duration_ms"
+            ], 22.0
+        )
+        self.assertEqual(len(browser.visited), 24)
+
     def test_navigation_p95_samples_firefox_timing_and_checks_each_page(self):
         class FixtureBrowser:
             def __init__(self):
@@ -300,6 +344,7 @@ class CompareTests(unittest.TestCase):
                     return {
                         "load_event_end_ms": 12.0 + index,
                         "dom_content_loaded_end_ms": 10.0 + index,
+                        "allowed_script_resource_duration_ms": 1.0 + index,
                         "navigation_type": "navigate",
                     }
                 if script == runner.OBSERVATION_SCRIPT:
@@ -317,12 +362,15 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(summary["p50_load_event_end_ms"], 23.5)
         self.assertEqual(summary["p95_load_event_end_ms"], 32.0)
         self.assertEqual(summary["p95_dom_content_loaded_end_ms"], 30.0)
+        self.assertEqual(summary["p95_allowed_script_resource_duration_ms"], 21.0)
+        self.assertEqual(summary["range_allowed_script_resource_duration_ms"], [3.0, 22.0])
         self.assertEqual(summary["range_load_event_end_ms"], [14.0, 33.0])
         self.assertNotIn("127.0.0.1", str(samples))
 
     def test_navigation_errors_reject_bad_samples(self):
         good = [
-            {"load_event_end_ms": 40.0, "dom_content_loaded_end_ms": 20.0}
+            {"load_event_end_ms": 40.0, "dom_content_loaded_end_ms": 20.0,
+             "allowed_script_resource_duration_ms": 3.0}
             for _ in range(20)
         ]
         for corrupted in (
@@ -331,6 +379,9 @@ class CompareTests(unittest.TestCase):
             [*good[:-1], {"load_event_end_ms": 10, "dom_content_loaded_end_ms": 20}],
             [*good[:-1], {"load_event_end_ms": float("nan"), "dom_content_loaded_end_ms": 10}],
             [*good[:-1], {"load_event_end_ms": 50, "dom_content_loaded_end_ms": 20, "url": "private"}],
+            [*good[:-1], {**good[0], "allowed_script_resource_duration_ms": float("nan")}],
+            [*good[:-1], {**good[0], "allowed_script_resource_duration_ms": 0}],
+            [*good[:-1], {**good[0], "allowed_script_resource_duration_ms": 99}],
         ):
             with self.subTest(corrupted=corrupted[-1:]):
                 with self.assertRaises(ValueError):
@@ -339,7 +390,8 @@ class CompareTests(unittest.TestCase):
     def test_comparison_reports_page_p95_and_rejects_missing_side(self):
         source, target = make_run(), make_run()
         timings = [
-            {"load_event_end_ms": float(x), "dom_content_loaded_end_ms": float(x - 2)}
+            {"load_event_end_ms": float(x), "dom_content_loaded_end_ms": float(x - 2),
+             "allowed_script_resource_duration_ms": 1.5}
             for x in range(5, 25)
         ]
         source["fixture_navigation"] = timings
@@ -347,6 +399,16 @@ class CompareTests(unittest.TestCase):
         report = runner.compare({"upstream": [source], "meblock": [target]}, DATASET)
         self.assertEqual(report["fixture_navigation"]["upstream"]["samples_per_run"], 20)
         self.assertEqual(report["fixture_navigation"]["upstream"]["median_run_p95_load_event_end_ms"], 23.0)
+        self.assertEqual(
+            report["fixture_navigation"]["upstream"][
+                "median_run_p95_allowed_script_resource_duration_ms"
+            ], 1.5
+        )
+        self.assertEqual(
+            report["fixture_navigation"]["upstream"][
+                "range_run_p95_allowed_script_resource_duration_ms"
+            ], [1.5, 1.5]
+        )
         self.assertIn("not production website", report["fixture_navigation"]["scope"])
         target.pop("fixture_navigation")
         with self.assertRaisesRegex(ValueError, "20 measured loads"):

@@ -8,6 +8,7 @@ a separate temporary profile for every run.
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -59,6 +60,7 @@ def firefox_process_snapshot(gecko_pid: int) -> dict:
             readings[process.pid] = {
                 "rss_bytes": process.memory_info().rss,
                 "cpu_seconds": cpu.user + cpu.system,
+                "create_time": process.create_time(),
             }
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue
@@ -66,6 +68,8 @@ def firefox_process_snapshot(gecko_pid: int) -> dict:
 
 
 def collect_idle(gecko_pid: int, duration: float) -> dict:
+    if not math.isfinite(duration) or duration <= 0:
+        raise ValueError("CPU sample duration must be positive and finite")
     readings = []
     started = time.perf_counter()
     while True:
@@ -79,8 +83,14 @@ def collect_idle(gecko_pid: int, duration: float) -> dict:
         raise RuntimeError("Could not observe Firefox descendants of the owned geckodriver")
 
     cpu_seconds = 0.0
+    churn = False
     for (_, previous), (_, current) in zip(readings, readings[1:]):
+        if set(previous) != set(current):
+            churn = True
         for pid in set(previous) & set(current):
+            if previous[pid]["create_time"] != current[pid]["create_time"]:
+                churn = True
+                continue
             cpu_seconds += max(
                 0.0, current[pid]["cpu_seconds"] - previous[pid]["cpu_seconds"]
             )
@@ -95,6 +105,7 @@ def collect_idle(gecko_pid: int, duration: float) -> dict:
         "firefox_process_count_peak": max(process_counts),
         "cpu_seconds_total": round(cpu_seconds, 5),
         "sample_count": len(readings),
+        "process_pid_churn_observed": churn,
     }
 
 

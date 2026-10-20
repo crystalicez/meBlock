@@ -29,7 +29,83 @@ def sample(condition, mib, *, selection="stable", source="sha-stock", version="1
     }
 
 
+def idle_cpu(percent=2, *, seconds=300, churn=False):
+    return {
+        "measurement_seconds": seconds,
+        "cpu_percent_one_core_equivalent": percent,
+        "rss_mb_median_sum": 480.0,
+        "rss_mb_peak_sum": 520.0,
+        "firefox_process_count_peak": 7,
+        "cpu_seconds_total": percent * seconds / 100,
+        "sample_count": round(seconds * 2) + 1,
+        "process_pid_churn_observed": churn,
+    }
+
+
 class PairedMemoryTests(unittest.TestCase):
+    def test_cpu_control_requires_complete_long_pinned_pair_and_never_claims_addon_cpu(self):
+        rows = []
+        for pair in range(3):
+            for name, percent in (("stock", 2), ("synthetic", 2.5)):
+                data = sample(name, 55)
+                data["idle_firefox_cpu"] = idle_cpu(percent)
+                rows.append((pair, name, data))
+        control = summarize_pairs(rows, mode="build")["idle_firefox_cpu"]
+        self.assertEqual(control["pairs"], 3)
+        self.assertEqual(control["paired_deltas_one_core_percent"], [0.5] * 3)
+        self.assertEqual(control["median_paired_delta_one_core_percent"], 0.5)
+        self.assertTrue(control["screening_gate_passed"])
+        self.assertIn("CONTROL", control["verdict"])
+        self.assertIn("Not isolated addon CPU", control["scope"])
+
+        rows[3][2]["idle_firefox_cpu"]["process_pid_churn_observed"] = True
+        unstable = summarize_pairs(rows, mode="build")["idle_firefox_cpu"]
+        self.assertFalse(unstable["screening_gate_passed"])
+        self.assertIn("EXPLORATORY", unstable["verdict"])
+        rows[3][2]["idle_firefox_cpu"]["process_pid_churn_observed"] = False
+        for _, _, data in rows:
+            data["settle_seconds_after_filter_readiness"] = 2
+            data["idle_firefox_cpu"] = idle_cpu(seconds=2)
+        short = summarize_pairs(rows, mode="build")["idle_firefox_cpu"]
+        self.assertFalse(short["screening_gate_passed"])
+        self.assertEqual(short["minimum_observed_seconds"], 2)
+
+    def test_cpu_fail_closed_when_partial_or_corrupted(self):
+        stock = sample("stock", 55)
+        candidate = sample("synthetic", 55)
+        stock["idle_firefox_cpu"] = idle_cpu()
+        with self.assertRaisesRegex(ValueError, "Incomplete Firefox idle CPU"):
+            summarize_pairs([(0, "stock", stock), (0, "synthetic", candidate)])
+        for field, invalid in (
+            ("measurement_seconds", float("nan")),
+            ("cpu_seconds_total", True),
+            ("sample_count", 1),
+            ("cpu_percent_one_core_equivalent", 999),
+            ("process_pid_churn_observed", 1),
+            ("firefox_process_count_peak", 0),
+            ("rss_mb_peak_sum", 100.0),
+            ("measurement_seconds", 999),
+        ):
+            with self.subTest(field=field):
+                candidate["idle_firefox_cpu"] = idle_cpu()
+                candidate["idle_firefox_cpu"][field] = invalid
+                with self.assertRaisesRegex(ValueError, "Invalid Firefox idle CPU"):
+                    summarize_pairs([
+                        (0, "stock", stock), (0, "synthetic", candidate),
+                    ], mode="build")
+
+    def test_cpu_screening_six_distinct_build_pairs_still_not_addon_attribution(self):
+        rows = []
+        for pair in range(6):
+            for name, percent in (("stock", 2), ("synthetic", 4)):
+                data = sample(name, 55, source=name)
+                data["idle_firefox_cpu"] = idle_cpu(percent)
+                rows.append((pair, name, data))
+        report = summarize_pairs(rows, mode="build")["idle_firefox_cpu"]
+        self.assertTrue(report["screening_gate_passed"])
+        self.assertIn("SCREENING ONLY", report["verdict"])
+        self.assertNotIn("faster", report["verdict"])
+
     def test_abba_schedule_is_balanced(self):
         self.assertEqual(
             list(schedule(3)),
@@ -157,6 +233,53 @@ class PairedMemoryTests(unittest.TestCase):
             saved = json.loads(next(Path(directory).glob("paired-memory-*.json")).read_text())
             self.assertEqual(saved["conditions"],
                              "identical XPI in both positions; same-build negative control")
+
+    def test_cpu_cli_opt_in_runs_only_in_private_default_profile(self):
+        calls = []
+        def fake_capture(*_args, **kwargs):
+            calls.append(kwargs)
+            data = sample("stock", 55)
+            data["filter_engine"]["network_filters"] = 252243
+            data["settle_seconds_after_filter_readiness"] = 2
+            data["idle_firefox_cpu"] = idle_cpu(seconds=2)
+            return data
+
+        with tempfile.TemporaryDirectory() as directory:
+            with (patch("memory_experiment.PRIVATE_DIR", Path(directory)),
+                  patch("memory_experiment.capture", side_effect=fake_capture),
+                  patch("memory_experiment.assert_uninstrumented_xpi"),
+                  redirect_stdout(StringIO())):
+                outcome = main([
+                    "--addon", "stock.xpi", "--candidate-addon", "stock.xpi",
+                    "--default-lists", "--pairs", "1", "--settle-seconds", "2",
+                    "--measure-idle-cpu",
+                ])
+            self.assertEqual(outcome, 0)
+            report = json.loads(next(Path(directory).glob("paired-memory-*.json")).read_text())
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(call["measure_idle_cpu"] is True for call in calls))
+        self.assertTrue(all(call["extra_rules"] == 0 for call in calls))
+        self.assertIn("EXPLORATORY", report["idle_firefox_cpu"]["verdict"])
+        with redirect_stderr(StringIO()):
+            with self.assertRaises(SystemExit) as error:
+                main([
+                    "--measure-idle-cpu", "--settle-seconds", "0",
+                    "--addon", "stock.xpi", "--candidate-addon", "stock.xpi",
+                    "--default-lists",
+                ])
+        self.assertEqual(error.exception.code, 2)
+
+    def test_nonfinite_settling_rejected_before_firefox(self):
+        for seconds in ("nan", "inf", "-inf"):
+            with self.subTest(seconds=seconds):
+                with redirect_stderr(StringIO()):
+                    with self.assertRaises(SystemExit) as caught:
+                        main([
+                            "--settle-seconds", seconds,
+                            "--default-lists", "--addon", "stock.xpi",
+                            "--candidate-addon", "stock.xpi",
+                        ])
+                self.assertEqual(caught.exception.code, 2)
 
     def test_default_ram_rejects_instrumented_comparison_xpi_before_firefox(self):
         with tempfile.TemporaryDirectory() as directory:

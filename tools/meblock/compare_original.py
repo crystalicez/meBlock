@@ -268,9 +268,14 @@ NAVIGATION_SAMPLES = 20
 NAVIGATION_SCRIPT = """
 const entry = performance.getEntriesByType('navigation')[0];
 if (!entry) { return null; }
+const allowed = performance.getEntriesByType('resource').filter(
+    resource => resource.initiatorType === 'script' &&
+        new URL(resource.name).pathname === '/test-allowed.js'
+);
 return {
     load_event_end_ms: entry.loadEventEnd,
     dom_content_loaded_end_ms: entry.domContentLoadedEventEnd,
+    allowed_script_resource_duration_ms: allowed.length === 1 ? allowed[0].duration : null,
     navigation_type: entry.type,
 };
 """
@@ -286,17 +291,25 @@ def summarize_fixture_navigation(samples):
         raise ValueError("Fixture navigation requires exactly 20 measured loads")
     for sample in samples:
         if not isinstance(sample, dict) or set(sample) != {
-            "load_event_end_ms", "dom_content_loaded_end_ms"
+            "load_event_end_ms", "dom_content_loaded_end_ms",
+            "allowed_script_resource_duration_ms",
         }:
             raise ValueError("Incomplete fixture navigation timing sample")
         load = sample["load_event_end_ms"]
         dom = sample["dom_content_loaded_end_ms"]
-        if (type(load) not in (int, float) or type(dom) not in (int, float)
-            or not math.isfinite(load) or not math.isfinite(dom)
-            or not 0 < dom <= load):
-            raise ValueError("Invalid browser navigation milestone order")
+        resource = sample["allowed_script_resource_duration_ms"]
+        if (
+            type(load) not in (int, float) or type(dom) not in (int, float)
+            or type(resource) not in (int, float)
+            or not all(math.isfinite(v) for v in (load, dom, resource))
+            or not 0 < dom <= load or not 0 < resource <= load
+        ):
+            raise ValueError("Invalid browser navigation or resource timing")
     load_times = [sample["load_event_end_ms"] for sample in samples]
     dom_times = [sample["dom_content_loaded_end_ms"] for sample in samples]
+    resource_times = [
+        sample["allowed_script_resource_duration_ms"] for sample in samples
+    ]
     return {
         "sample_count": len(samples),
         "warmup_navigations": NAVIGATION_WARMUP,
@@ -304,7 +317,17 @@ def summarize_fixture_navigation(samples):
         "p95_load_event_end_ms": round(nearest_rank(load_times, 0.95), 3),
         "range_load_event_end_ms": [round(min(load_times), 3), round(max(load_times), 3)],
         "p95_dom_content_loaded_end_ms": round(nearest_rank(dom_times, 0.95), 3),
-        "scope": "loopback fixture document navigation, not real-world request-level p95",
+        "p95_allowed_script_resource_duration_ms": round(
+            nearest_rank(resource_times, 0.95), 3
+        ),
+        "range_allowed_script_resource_duration_ms": [
+            round(min(resource_times), 3), round(max(resource_times), 3)
+        ],
+        "scope": (
+            "Loopback fixture navigation and one no-store allowed script resource "
+            "per navigation. Resource Timing duration is an actual browser-observed "
+            "local request, not a production website or representative request p95."
+        ),
     }
 
 
@@ -328,6 +351,9 @@ def measure_fixture_navigation(browser, endpoint, expected):
             records.append({
                 "load_event_end_ms": timing.get("load_event_end_ms"),
                 "dom_content_loaded_end_ms": timing.get("dom_content_loaded_end_ms"),
+                "allowed_script_resource_duration_ms": timing.get(
+                    "allowed_script_resource_duration_ms"
+                ),
             })
     summarize_fixture_navigation(records)
     return records
@@ -395,7 +421,8 @@ def test_without_addon(endpoint, driver_binary, firefox_binary):
         parameters = observe_parameters(browser, endpoint)
         if parameters != PARAMETERS_WITHOUT_ADDON:
             raise RuntimeError(f"Unfiltered parameter control failed: {parameters}")
-        return {"page": observed, "parameters": parameters}
+        navigation = measure_fixture_navigation(browser, endpoint, WITHOUT_ADDON)
+        return {"page": observed, "parameters": parameters, "navigation": navigation}
     finally:
         browser.quit()
 
@@ -802,6 +829,18 @@ def compare(data, dataset, identical_build=False, *, default_lists=False):
                 "median_run_p95_load_event_end_ms": round(statistics.median(
                     item["p95_load_event_end_ms"] for item in summaries
                 ), 3),
+                "median_run_p95_allowed_script_resource_duration_ms": round(
+                    statistics.median(
+                        item["p95_allowed_script_resource_duration_ms"]
+                        for item in summaries
+                    ), 3
+                ),
+                "range_run_p95_allowed_script_resource_duration_ms": [
+                    min(item["p95_allowed_script_resource_duration_ms"]
+                        for item in summaries),
+                    max(item["p95_allowed_script_resource_duration_ms"]
+                        for item in summaries),
+                ],
                 "range_run_p95_load_event_end_ms": [
                     min(item["p95_load_event_end_ms"] for item in summaries),
                     max(item["p95_load_event_end_ms"] for item in summaries),
@@ -810,8 +849,9 @@ def compare(data, dataset, identical_build=False, *, default_lists=False):
             for label, summaries in navigation_summaries.items()
         }
         fixture_navigation["scope"] = (
-            "synthetic loopback page navigation, includes browser and extension; "
-            "not production website or request-level p95"
+            "synthetic loopback page navigation and one actual no-store script "
+            "resource per navigation; browser-wide local request duration, "
+            "not production website request p95 or addon-only filtering latency"
         )
     else:
         fixture_navigation = None

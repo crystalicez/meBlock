@@ -36,6 +36,27 @@ speed-test package cannot silently contaminate the RAM baseline.
 With the **same XPI** in both positions, it serves as a noise-only
 negative control.
 
+The same paired runner can also collect Firefox-wide **idle CPU time** during
+the post-readiness settling window. This is opt-in, so older RAM controls
+remain comparable within their own measurement method:
+
+```powershell
+python tools/meblock/memory_experiment.py --addon dist/build/upstream-test.xpi --candidate-addon dist/build/upstream-test.xpi --default-lists --pairs 3 --settle-seconds 300 --measure-idle-cpu
+```
+
+The command is a same-XPI CPU/RAM noise control; build both real files before
+using placeholders above. The CPU sampler follows only processes owned by the
+disposable Firefox instance. It records summed descendant CPU seconds as
+one-core-equivalent utilization over the observed wall time, alongside
+process count and process-identity churn. The paired CPU gate requires
+complete numeric samples from **both conditions**, a full 300-second window
+per profile, stable observed process identity, and at least three independent
+pairs for a same-XPI control or six for a different-build screen. Short
+samples or process churn remain **EXPLORATORY**; even a passed different-build
+CPU gate is *screening only*, not addon-exclusive CPU attribution, per-request
+p95, or a speedup claim. The sampled profiles use default lists only, with
+zero injected correctness rules; collected reports remain local and ignored.
+
 A three-pair, five-minute experiment produces paired whole-Extensions-process
 readings but is not automatically proof of extension-private RAM savings.
 The paired report includes the actual Firefox version, compiled filter counts,
@@ -58,6 +79,18 @@ was **1.0**. These are observed same-build process deviations, not
 an upper bound on environmental noise, per-addon retained RAM, or a
 measured gain. Actual different-build optimization comparisons still
 require their own long AB/BA validation.
+
+A second, independently completed **three-pair 300-second same-XPI
+CPU-plus-memory control** on Firefox 157 (2026-10-20) held 252,243 network
+and 44,192 cosmetic filters and ten selected default lists fixed across all
+six disposable profiles. Every CPU interval lasted at least 300.044 seconds,
+with no observed Firefox process identity churn. The median paired
+Firefox-wide idle CPU difference was **−0.068 one-core percentage points**,
+and the maximum absolute paired CPU difference was **0.183 points**.
+Extensions-process `explicit` memory had median paired delta **−0.006 MiB**
+and maximum absolute delta **0.079 MiB**. Both verdicts were `CONTROL`,
+not addon-specific improvements. Raw evidence remains in ignored local
+`dist/build/private-memory/`.
 
 The fixed cosmetic/scriptlet browser fixture and synthetic request corpus
 remain separate **correctness tests**, not part of this default RAM baseline.
