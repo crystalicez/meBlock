@@ -110,6 +110,29 @@ def classify_filter_text_line(line):
     return "other_syntax"
 
 
+def normalized_supported_rule_key(line):
+    match = recognized_rule(line)
+    if match is None:
+        return None
+    _, host, options = match
+    return (
+        line.startswith("@@"), host,
+        tuple(sorted(options.split(","))) if options else (),
+    )
+
+
+def badfilter_target_key(line):
+    before, separator, options = line.rpartition("$")
+    if not separator:
+        return None
+    tokens = options.split(",")
+    if tokens.count("badfilter") != 1:
+        return None
+    remaining = [token for token in tokens if token != "badfilter"]
+    target = before + ("$" + ",".join(remaining) if remaining else "")
+    return normalized_supported_rule_key(target)
+
+
 def collect_bundled_rules(archive, selected_keys=None):
     files = sorted(
         name for name in archive.namelist()
@@ -122,6 +145,7 @@ def collect_bundled_rules(archive, selected_keys=None):
     if not files:
         raise ValueError("XPI has no bundled public filter-list text assets")
     eligible = set()
+    disabled_keys = set()
     candidate_lines = 0
     categories = Counter()
     bundle = hashlib.sha256()
@@ -138,11 +162,22 @@ def collect_bundled_rules(archive, selected_keys=None):
             categories[classify_filter_text_line(line)] += 1
             if recognized_rule(line) is not None:
                 eligible.add(line)
+            disabled = badfilter_target_key(line)
+            if disabled is not None:
+                disabled_keys.add(disabled)
+    original_unique = len(eligible)
+    eligible = {
+        rule for rule in eligible
+        if normalized_supported_rule_key(rule) not in disabled_keys
+    }
+    excluded = original_unique - len(eligible)
     return sorted(eligible), {
         "bundled_asset_count": len(files),
         "bundled_asset_contents_sha256": bundle.hexdigest(),
         "noncomment_filter_lines": candidate_lines,
         "simple_host_rule_unique": len(eligible),
+        "simple_host_rule_before_badfilter_unique": original_unique,
+        "excluded_by_bundled_badfilter_rule_count": excluded,
         "unsupported_or_duplicate_lines": candidate_lines - len(eligible),
         "syntax_input_line_counts": {
             key: categories[key] for key in (
@@ -308,7 +343,12 @@ def main(argv=None):
         output.with_suffix(output.suffix + ".manifest.json").write_bytes(
             (json.dumps(coverage, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
         )
-        print(json.dumps(coverage, indent=2))
+        # The expected per-rule allow vector stays in the ignored manifest,
+        # not the terminal summary or public reports.
+        print(json.dumps({
+            key: value for key, value in coverage.items()
+            if key != "expected_explicit_allow_by_origin"
+        }, indent=2))
         return 0
     except (OSError, ValueError, KeyError) as exc:
         print(f"Default-rule probe rejected: {exc}")

@@ -134,6 +134,9 @@ async function main() {
 
     const outcomes = [];
     const modifierMasks = [];
+    // This emits only bit codes, never the matched filter's text or URL.
+    // It is enabled only for disposable default-exception challenge XPIs.
+    const challengeMatchSources = config.challenge_diagnostics ? [] : null;
     let blocked = 0;
     let allowed = 0;
     for (const row of data) {
@@ -143,6 +146,20 @@ async function main() {
         if (decision === 1) { blocked += 1; }
         if (decision === 2) { allowed += 1; }
         outcomes.push(decision);
+        if (challengeMatchSources !== null) {
+            const raw = decision === 0 ? '' : (sfne.toLogData()?.raw || '');
+            // Exact log text is a *shape*, not reliable rule provenance:
+            // a compiled/default rule may have identical normalized logging.
+            const exactHostBlockShape = '||' + new URL(row.url).hostname + '^';
+            let code = 0;
+            if (raw === exactHostBlockShape) { code |= 1; }
+            if (decision === 1 && sfne.isBlockImportant()) { code |= 2; }
+            if (raw.startsWith('@@')) { code |= 4; }
+            if (raw !== '' && raw !== exactHostBlockShape && !raw.startsWith('@@')) {
+                code |= 8;
+            }
+            challengeMatchSources.push(code);
+        }
 
         // Same modifier calls as upstream's benchmark, outside the timed loop.
         let mask = 0;
@@ -183,6 +200,7 @@ async function main() {
         request_latency: latency,
         outcomes,
         modifier_masks: modifierMasks,
+        challenge_match_source_codes: challengeMatchSources || [],
         fixture_precedence: fixturePrecedence,
         decisions: { blocked, allowed, passed: data.length - blocked - allowed },
         official,

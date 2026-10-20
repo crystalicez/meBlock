@@ -117,6 +117,51 @@ Verdict **CORRECTNESS-ONLY**, not an optimization result.
 A separate real `--default-lists` control verified 0 injected
 filters and unchanged decisions/modifier masks.
 
+**Matcher-log diagnostic (correctness mode only):** To investigate an
+unconfirmed exception without exposing rule contents, the disposable
+Firefox probe records a bit code for each engine match: `1` means the
+logged rule has the exact-host-block **text shape**, `2` an important
+block, `4` an exception log, and `8` another logged blocker shape.
+Codes never contain URLs, hostnames or raw filter text. These are
+**logging classifications, not provenance**: code `1` does **not**
+establish that the selected match came from an injected test rule.
+The comparator strictly validates the code vector and reports numeric
+codes only for unconfirmed candidate indices. Non-challenge runs
+must produce an empty code vector.
+
+For the historically unresolved candidate, upstream and meBlock both
+returned block decision `1` and exact-host log-shape code `1` in
+both contexts. A separate *forensic-only* run with
+`--exception-challenge --challenge-withhold-target-blocker-index 126`
+omitted that candidate's synthetic target blocker while retaining the
+reserved-host control, yet observed the same decisions and log-shape
+codes. This is **not** evidence of a particular rule's origin or an
+optimization; it demonstrates why log text must not be treated as
+source attribution. Inspecting the pinned selected **public** filter
+text then revealed a matching `$badfilter` directive for the old
+exception candidate. The initial 164/165 was a corpus eligibility
+problem, **not** a proven filtering-engine regression.
+
+The generator now scans all mapped selected public assets for
+`$badfilter` directives matching supported simple-host candidates;
+it normalizes the order of their safe request-type/party modifiers
+before excluding them. Across the eight mapped public assets,
+**99,120** supported candidate forms become **99,107** after
+excluding **13** syntactically disabled rules (**12 blocking,
+1 exception**). This is a conservative *public-source* screening,
+not a runtime proof about the two selected lists without mapped
+bundled text or about more complex modifier families.
+
+**Updated real Firefox challenge:** All **164** remaining exception
+candidates produced an observed contextual override, all **177/177**
+syntax-expected allow contexts were confirmed, and **328/328** reserved
+synthetic blocking controls worked, independently across two alternating
+A/B pairs / four disposable Firefox profiles. All **656 requests per
+profile** matched between upstream and meBlock. The prior 165-candidate
+measurement remains historical evidence for the unscreened corpus,
+not an unresolved product bug. No production filters or default-only
+RAM/performance inputs were changed.
+
 ## Independent exception and precedence oracle (test-only fixture v6)
 
 The non-default correctness comparison injects fourteen **synthetic,

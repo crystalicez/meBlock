@@ -329,6 +329,26 @@ class CompareTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "20 measured loads"):
             runner.compare({"upstream": [source], "meblock": [target]}, DATASET)
 
+    def test_challenge_match_source_diagnostics_are_isolated_and_validated(self):
+        valid = {"dataset_rows": 4, "challenge_match_source_codes": [1, 2, 4, 8]}
+        runner.validate_challenge_match_codes(valid, True)
+        runner.validate_challenge_match_codes({
+            "dataset_rows": 4, "challenge_match_source_codes": [],
+        }, False)
+        for wrong in ([1, 2, 4], [True, 2, 4, 8],
+                      [16, 2, 4, 8], ["||private.host^", 1, 4, 8]):
+            with self.subTest(codes=wrong):
+                with self.assertRaisesRegex(ValueError, "match-source diagnostics"):
+                    runner.validate_challenge_match_codes({
+                        "dataset_rows": 4, "challenge_match_source_codes": wrong,
+                    }, True)
+        with self.assertRaisesRegex(ValueError, "match-source diagnostics"):
+            runner.validate_challenge_match_codes(valid, False)
+        with self.assertRaisesRegex(ValueError, "match-source diagnostics"):
+            runner.validate_challenge_match_codes({
+                "dataset_rows": True, "challenge_match_source_codes": [],
+            }, False)
+
     def test_exception_challenge_controls_and_override_attribution(self):
         # Three exceptions: first-party, third-party, and party-unrestricted.
         rows = []
@@ -357,12 +377,28 @@ class CompareTests(unittest.TestCase):
             "||b.example^", "||mb-exception-control-00001.test^",
             "||c.example^", "||mb-exception-control-00002.test^",
         ))
+        self.assertEqual(
+            runner.withhold_target_challenge_blocker(rules, 1),
+            (
+                "||a.example^", "||mb-exception-control-00000.test^",
+                "||mb-exception-control-00001.test^",
+                "||c.example^", "||mb-exception-control-00002.test^",
+            ),
+        )
+        for invalid in (-1, 3, True):
+            with self.assertRaisesRegex(ValueError, "withheld"):
+                runner.withhold_target_challenge_blocker(rules, invalid)
         outcomes = [
             1, 1, 2, 1,
             2, 1, 1, 1,
             2, 1, 2, 1,
         ]
-        measured = runner.summarize_exception_challenge({"outcomes": outcomes}, coverage)
+        match_codes = [1, 1, 4, 1, 4, 1, 1, 1, 4, 1, 4, 1]
+        observation = {
+            "outcomes": outcomes,
+            "challenge_match_source_codes": match_codes,
+        }
+        measured = runner.summarize_exception_challenge(observation, coverage)
         self.assertEqual(measured["candidate_rules"], 3)
         self.assertEqual(measured["expected_override_contexts"], 4)
         self.assertEqual(measured["confirmed_override_contexts"], 4)
@@ -373,8 +409,13 @@ class CompareTests(unittest.TestCase):
         # When the negative near-miss is explicitly allowed, the positive
         # is NOT attributed to that candidate (even if the positive is allow).
         outcomes[11] = 2
-        rejected = runner.summarize_exception_challenge({"outcomes": outcomes}, coverage)
+        rejected = runner.summarize_exception_challenge(observation, coverage)
         self.assertEqual(rejected["confirmed_override_contexts"], 3)
+        self.assertEqual(rejected["first_25_unconfirmed_match_codes"], [{
+            "index": 2,
+            "matching_host_codes": [4, 4],
+            "control_host_codes": [1, 1],
+        }])
         self.assertEqual(rejected["blocking_negative_controls_passed"], 5)
         self.assertEqual(rejected["first_25_control_failure_indices"], [2])
         broken = deepcopy(rows)
@@ -392,7 +433,15 @@ class CompareTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Malformed exception challenge"):
             runner.exception_blocking_controls(broken, coverage)
         with self.assertRaisesRegex(ValueError, "Incomplete exception challenge"):
-            runner.summarize_exception_challenge({"outcomes": outcomes[:-1]}, coverage)
+            runner.summarize_exception_challenge({
+                **observation, "outcomes": outcomes[:-1],
+            }, coverage)
+        for malformed in (match_codes[:-1], [True] + match_codes[1:],
+                          [16] + match_codes[1:]):
+            with self.assertRaisesRegex(ValueError, "match-source codes"):
+                runner.summarize_exception_challenge({
+                    **observation, "challenge_match_source_codes": malformed,
+                }, coverage)
 
     def test_default_rule_candidate_effects_detect_real_outcome_and_modifier_differences(self):
         observation = {
@@ -535,6 +584,19 @@ class CompareTests(unittest.TestCase):
             self.assertEqual(safe["request_count"], 4)
             self.assertEqual(safe["bundled_asset_contents_sha256"], "a" * 64)
             self.assertNotIn("private_raw_filter", safe)
+            counted = {
+                **manifest,
+                "simple_host_rule_before_badfilter_unique": 19,
+                "excluded_by_bundled_badfilter_rule_count": 3,
+            }
+            sidecar.write_text(json.dumps(counted), encoding="utf-8")
+            badfilter_meta = runner.read_rule_derived_manifest(dataset, payload, rows, True)
+            self.assertEqual(badfilter_meta["excluded_by_bundled_badfilter_rule_count"], 3)
+            counted["excluded_by_bundled_badfilter_rule_count"] = 2
+            sidecar.write_text(json.dumps(counted), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "badfilter-excluded coverage"):
+                runner.read_rule_derived_manifest(dataset, payload, rows, True)
+            sidecar.write_text(json.dumps(manifest), encoding="utf-8")
             family_manifest = {
                 **manifest,
                 "rule_family": "exception", "family_rule_unique": 1,
@@ -911,6 +973,8 @@ class PackageTests(unittest.TestCase):
                 self.assertIn("||mb-exception-control-00000.test^", actual)
                 self.assertNotIn("mb-fixture-override", actual)
                 self.assertIn(b'"precedence_cases": []',
+                              result.read("js/meblock-probe.js"))
+                self.assertIn(b'"challenge_diagnostics": true',
                               result.read("js/meblock-probe.js"))
 
     def test_instrumented_package_tracks_fork_identity(self):

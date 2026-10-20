@@ -124,6 +124,7 @@ def probe_package(build, destination, role, endpoint, token, dataset_bytes,
             [precedence_case_request(case) for case in PRECEDENCE_CASES]
             if include_fixture_rules else []
         ),
+        "challenge_diagnostics": bool(challenge_rules),
     }
     (build / "assets" / "meblock-requests.json").write_bytes(dataset_bytes)
     background = build / "js" / "background.js"
@@ -411,9 +412,23 @@ def precedence_mismatches(observed, *, default_lists):
     ]
 
 
+def validate_challenge_match_codes(result, enabled):
+    observed = result.get("challenge_match_source_codes")
+    rows = result.get("dataset_rows")
+    expected_count = rows if enabled else 0
+    if (
+        type(rows) is not int or rows < 1
+        or type(expected_count) is not int or expected_count < 0
+        or not isinstance(observed, list) or len(observed) != expected_count
+        or any(type(code) is not int or not 0 <= code <= 15
+               for code in observed)
+    ):
+        raise ValueError("Incorrect challenge match-source diagnostics")
+
+
 def firefox_run(xpi, role, state, driver_binary, firefox_binary,
                 timeout, idle_sample, endpoint, expected_addon_id,
-                *, default_lists=False):
+                *, default_lists=False, expect_challenge_diagnostics=False):
     options = Options()
     options.binary_location = str(firefox_binary)
     options.add_argument("-headless")
@@ -445,6 +460,7 @@ def firefox_run(xpi, role, state, driver_binary, firefox_binary,
         )
         if failures:
             raise RuntimeError(f"Firefox static precedence regression: {failures[:18]}")
+        validate_challenge_match_codes(result, expect_challenge_diagnostics)
         result["fixture_precedence_verified"] = True
         result["addon_id_verified"] = True
         result["firefox_version"] = browser.capabilities.get("browserVersion")
@@ -943,6 +959,21 @@ def read_rule_derived_manifest(dataset, payload, rows, default_lists):
                 manifest["selected_list_count"]):
             raise ValueError("Invalid selected default-list provenance")
     allowed = ("schema", *numbers, "dataset_sha256", "bundled_asset_contents_sha256")
+    badfilter_fields = (
+        "simple_host_rule_before_badfilter_unique",
+        "excluded_by_bundled_badfilter_rule_count",
+    )
+    if any(key in manifest for key in badfilter_fields):
+        if (
+            any(type(manifest.get(key)) is not int or manifest[key] < 0
+                for key in badfilter_fields)
+            or manifest["simple_host_rule_before_badfilter_unique"] != (
+                manifest["simple_host_rule_unique"] +
+                manifest["excluded_by_bundled_badfilter_rule_count"]
+            )
+        ):
+            raise ValueError("Invalid badfilter-excluded coverage counters")
+        allowed += badfilter_fields
     if family is not None:
         allowed += ("rule_family", *family_fields)
     allowed += (("selected_list_keys_sha256", "selected_list_count",
@@ -1052,15 +1083,33 @@ def exception_blocking_controls(dataset, coverage):
     return tuple(rules)
 
 
+def withhold_target_challenge_blocker(challenge_rules, index):
+    """Forensic-only leave-one-target-blocker-out; retain every control."""
+    if (type(index) is not int or not 0 <= index < len(challenge_rules) // 2
+        or len(challenge_rules) % 2 or
+        any(type(rule) is not str or not rule.startswith("||")
+            for rule in challenge_rules)):
+        raise ValueError("Invalid withheld challenge candidate index")
+    return tuple(
+        rule for rule_index, rule in enumerate(challenge_rules)
+        if rule_index != index * 2
+    )
+
+
 def summarize_exception_challenge(sample, coverage):
     if coverage is None or coverage.get("exception_challenge") is not True:
         raise ValueError("No exception challenge oracle")
     expectations = coverage["_expected_allow_by_origin"]
     outcomes = sample.get("outcomes")
+    match_codes = sample.get("challenge_match_source_codes")
     count = coverage["simple_host_rules_in_shard"]
     if (not isinstance(outcomes, list) or len(outcomes) != count * 4 or
         any(type(v) is not int or v not in (0, 1, 2) for v in outcomes)):
         raise ValueError("Incomplete exception challenge decisions")
+    if (not isinstance(match_codes, list) or len(match_codes) != count * 4
+        or any(type(code) is not int or not 0 <= code <= 15
+               for code in match_codes)):
+        raise ValueError("Incomplete exception challenge match-source codes")
     expected_total = confirmed = controls_blocked = 0
     candidates_confirmed = 0
     missed = []
@@ -1093,8 +1142,28 @@ def summarize_exception_challenge(sample, coverage):
         "blocking_negative_controls_total": count * 2,
         "first_25_unconfirmed_indices": sorted(set(missed))[:25],
         "first_25_control_failure_indices": sorted(set(controls_failed))[:25],
+        "first_25_unconfirmed_match_codes": [
+            {
+                "index": index,
+                "matching_host_codes": [
+                    match_codes[index * 4], match_codes[index * 4 + 2],
+                ],
+                "control_host_codes": [
+                    match_codes[index * 4 + 1], match_codes[index * 4 + 3],
+                ],
+            }
+            for index in sorted(set(missed + controls_failed))[:25]
+        ],
+        "match_source_code_bits": {
+            "exact_host_block_log_shape": 1,
+            "important_block": 2,
+            "logged_exception": 4,
+            "other_logged_blocker": 8,
+        },
         "scope": (
             "Pinned public default exception candidates plus test-only per-host blockers. "
+            "Match-source bit codes describe normalized engine log shapes, NOT "
+            "which source list or injected rule supplied the match. "
             "A positive explicit-allow decision against a blocked near-miss is an "
             "observed override in this context, not unique per-rule attribution. "
             "Unconfirmed outcomes can reflect absent lists, disabled rules, "
@@ -1129,6 +1198,11 @@ def main():
     p.add_argument("--firefox", type=Path, default=Path(r"C:\Program Files\Mozilla Firefox\firefox.exe"))
     p.add_argument("--build-only", action="store_true")
     p.add_argument(
+        "--challenge-withhold-target-blocker-index", type=int, default=None,
+        help="Forensic correctness-only challenge: omit one synthetic target blocker "
+             "by numeric candidate index; never valid for default-list benchmarking",
+    )
+    p.add_argument(
         "--exception-challenge", action="store_true",
         help="Correctness-only selected default exceptions versus temporary blockers; not a performance baseline",
     )
@@ -1142,6 +1216,9 @@ def main():
         p.error("Invalid runs, timeout, or sample duration")
     if args.default_lists and args.exception_challenge:
         p.error("Exception challenge must be isolated from --default-lists baseline")
+    if (args.challenge_withhold_target_blocker_index is not None and
+        not args.exception_challenge):
+        p.error("Withheld target blocker requires correctness-only --exception-challenge")
     if not args.firefox.is_file() and not args.build_only:
         p.error("Firefox binary not found")
     dirty_paths = git("status", "--porcelain")
@@ -1154,6 +1231,13 @@ def main():
         exception_blocking_controls(dataset, derived_coverage)
         if args.exception_challenge else ()
     )
+    if args.challenge_withhold_target_blocker_index is not None:
+        try:
+            challenge_rules = withhold_target_challenge_blocker(
+                challenge_rules, args.challenge_withhold_target_blocker_index
+            )
+        except ValueError as error:
+            p.error(str(error))
     if (not args.exception_challenge and derived_coverage is not None and
         derived_coverage.get("exception_challenge")):
         p.error("Exception challenge corpus requires --exception-challenge")
@@ -1193,6 +1277,9 @@ def main():
         "runs_per_build": args.runs, "steps": [], "test_only_probe": True,
         "default_enabled_lists_only": args.default_lists,
         "exception_challenge_correctness_only": args.exception_challenge,
+        "challenge_withheld_target_blocker_index": (
+            args.challenge_withhold_target_blocker_index
+        ),
         "injected_filter_rules": (
             len(challenge_rules) if args.exception_challenge else
             0 if args.default_lists else len(RULES)
@@ -1245,6 +1332,7 @@ def main():
                     args.firefox, args.timeout, args.idle_sample, endpoint,
                     packages[role]["addon_id"],
                     default_lists=args.default_lists or args.exception_challenge,
+                    expect_challenge_diagnostics=args.exception_challenge,
                 )
                 data[role].append(result)
                 print(json.dumps({
@@ -1277,6 +1365,8 @@ def main():
             metadata["comparison"]["exception_challenge_scope"] = (
                 "Correctness diagnostic only: challenge blockers were injected into "
                 "temporary builds; this is NOT the unmodified default-list baseline. "
+                "Withholding a target blocker is a forensic differential, not "
+                "additional proof of exception correctness. "
                 "A non-blocked negative control invalidates only that candidate's "
                 "override attribution, never silently counts it as confirmed."
             )

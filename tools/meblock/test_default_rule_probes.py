@@ -77,6 +77,46 @@ class DefaultRuleProbeTests(unittest.TestCase):
         ])
         self.assertEqual({r["cpt"] for r in rows}, {"image", "script"})
 
+    def test_cross_asset_badfilter_excludes_disabled_simple_host_candidates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            addon = Path(directory) / "selected.xpi"
+            with ZipFile(addon, "w") as output:
+                output.writestr("assets/assets.dev.json", json.dumps({
+                    "base": {"contentURL": ["assets/a.txt"]},
+                    "overrides": {"contentURL": ["assets/b.txt"]},
+                }))
+                output.writestr("assets/a.txt", "\n".join((
+                    "@@||active.example^$script",
+                    "@@||disabled.example^$script",
+                    "||disabled2.example^$third-party,script",
+                    "||unaffected.example^",
+                )))
+                output.writestr("assets/b.txt", "\n".join((
+                    "@@||disabled.example^$badfilter,script",
+                    "||disabled2.example^$script,third-party,badfilter",
+                    "@@||unrelated.example^$script,badfilter",
+                )))
+            with ZipFile(addon) as source:
+                rules, counts = probes.collect_bundled_rules(
+                    source, selected_keys=["base", "overrides"],
+                )
+                self.assertEqual(rules, [
+                    "@@||active.example^$script",
+                    "||unaffected.example^",
+                ])
+                self.assertEqual(counts["excluded_by_bundled_badfilter_rule_count"], 2)
+                self.assertEqual(counts["simple_host_rule_before_badfilter_unique"], 4)
+                self.assertEqual(counts["simple_host_rule_unique"], 2)
+                requests, report = probes.build_probes(
+                    source, shard_index=0, shard_count=1,
+                    rule_family="exception", selected_keys=["base", "overrides"],
+                    exception_challenge=True,
+                )
+                self.assertEqual(report["eligible_exception_rule_unique"], 1)
+                self.assertEqual(report["excluded_by_bundled_badfilter_rule_count"], 2)
+                self.assertEqual(report["request_count"], 4)
+                self.assertEqual(requests[0]["url"], "https://active.example/probe.js")
+
     def test_exception_challenge_expected_party_contexts_and_guard(self):
         source_lines = [
             "@@||a.example^$script,1p",
