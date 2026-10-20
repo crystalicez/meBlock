@@ -114,13 +114,17 @@ def run_build(source, assets):
 
 
 def probe_package(build, destination, role, endpoint, token, dataset_bytes,
-                  *, include_fixture_rules=True, challenge_rules=()):
+                  *, include_fixture_rules=True, challenge_rules=(),
+                  timing_sensitivity_control=False):
     network_engine = build / "js" / "static-net-filtering.js"
     original_engine = network_engine.read_text(encoding="utf-8")
     if "meblockEngineBufferFootprint" in original_engine:
         raise RuntimeError("Test-only engine buffer probe already injected")
+    if timing_sensitivity_control and (include_fixture_rules or challenge_rules):
+        raise ValueError("Timing sensitivity control requires default-list-only probes")
     config = {
         "role": role, "endpoint": endpoint, "token": token,
+        "sensitivity_control": timing_sensitivity_control and role == "meblock",
         "precedence_cases": (
             [precedence_case_request(case) for case in PRECEDENCE_CASES]
             if include_fixture_rules else []
@@ -1431,6 +1435,61 @@ def summarize_exception_challenge(sample, coverage):
     }
 
 
+def verify_timing_sensitivity(data, summary, dataset):
+    """Validate a deliberate, disposable 5ms/script-batch timing signal.
+
+    This is not an engine performance experiment or a candidate speedup.
+    """
+    counts = Counter(row["cpt"] for row in dataset)
+    if set(counts) != {"script", "image", "stylesheet", "xmlhttprequest"}:
+        raise ValueError("Sensitivity control requires a mixed default-list corpus")
+    expected = counts["script"] * 3
+    for role in ROLES:
+        for run in data[role]:
+            required = expected if role == "meblock" else 0
+            if (type(run.get("timing_sensitivity_injected_batches")) is not int
+                    or run["timing_sensitivity_injected_batches"] != required):
+                raise ValueError("Incorrect disposable timing sensitivity injection count")
+    figures = summary.get("batched_matcher") or {}
+    try:
+        reference = figures["upstream"]["by_request_type"]["script"][
+            "median_run_p95_amortized_context_us"
+        ]
+        changed = figures["meblock"]["by_request_type"]["script"][
+            "median_run_p95_amortized_context_us"
+        ]
+        both = (
+            figures["upstream"]["by_request_type"]["script"][
+                "stable_three_profile_null_control"
+            ] is True
+            and figures["meblock"]["by_request_type"]["script"][
+                "stable_three_profile_null_control"
+            ] is True
+        )
+    except (KeyError, TypeError):
+        raise ValueError("Missing per-type timing sensitivity evidence") from None
+    if (type(reference) not in (float, int) or
+        type(changed) not in (float, int) or
+        not math.isfinite(reference) or not math.isfinite(changed) or
+        reference <= 0 or changed <= 0):
+        raise ValueError("Invalid timing sensitivity estimates")
+    ratio = changed / reference
+    return {
+        "schema": "meblock-timing-sensitivity-control-v1",
+        "injected_delay_per_script_batch_us": 5000,
+        "injected_script_batches_per_experimental_run": expected,
+        "observed_script_amortized_ratio": round(ratio, 4),
+        "visible_strong_signal": both and ratio >= 1.20,
+        "scope": (
+            "Disposable test-probe positive control only: deliberate 5ms "
+            "timing delay for each script batch in the experimental role, "
+            "outside matchRequest but inside the batch timer. Does not "
+            "demonstrate an actual engine slowdown, detectability of "
+            "small changes, or any candidate speedup."
+        ),
+    }
+
+
 def verify_pinned_selection(data, derived_coverage):
     if derived_coverage is None or "selected_list_keys_sha256" not in derived_coverage:
         return
@@ -1457,6 +1516,11 @@ def main():
     p.add_argument("--firefox", type=Path, default=Path(r"C:\Program Files\Mozilla Firefox\firefox.exe"))
     p.add_argument("--build-only", action="store_true")
     p.add_argument(
+        "--timing-sensitivity-control", action="store_true",
+        help="Disposable +5ms/script-batch positive control in one role; "
+             "NEVER a default baseline or optimization measurement",
+    )
+    p.add_argument(
         "--challenge-withhold-target-blocker-index", type=int, default=None,
         help="Forensic correctness-only challenge: omit one synthetic target blocker "
              "by numeric candidate index; never valid for default-list benchmarking",
@@ -1475,6 +1539,12 @@ def main():
         p.error("Invalid runs, timeout, or sample duration")
     if args.default_lists and args.exception_challenge:
         p.error("Exception challenge must be isolated from --default-lists baseline")
+    if args.timing_sensitivity_control and (
+        not args.default_lists or args.runs < 3 or args.build_only
+        or args.exception_challenge or
+        args.challenge_withhold_target_blocker_index is not None
+    ):
+        p.error("Timing sensitivity control requires >=3 real default-list-only pairs")
     if (args.challenge_withhold_target_blocker_index is not None and
         not args.exception_challenge):
         p.error("Withheld target blocker requires correctness-only --exception-challenge")
@@ -1536,6 +1606,7 @@ def main():
         "runs_per_build": args.runs, "steps": [], "test_only_probe": True,
         "default_enabled_lists_only": args.default_lists,
         "exception_challenge_correctness_only": args.exception_challenge,
+        "timing_sensitivity_control_only": args.timing_sensitivity_control,
         "challenge_withheld_target_blocker_index": (
             args.challenge_withhold_target_blocker_index
         ),
@@ -1569,6 +1640,7 @@ def main():
                 built, xpi, role, endpoint, state.token, raw,
                 include_fixture_rules=not (args.default_lists or args.exception_challenge),
                 challenge_rules=challenge_rules,
+                timing_sensitivity_control=args.timing_sensitivity_control,
             )
             builds[role] = xpi
             metadata["steps"].append(f"{role} built and test probe injected")
@@ -1606,6 +1678,23 @@ def main():
             data, dataset, identical_build=metadata["build_delta"]["files_different"] == 0,
             default_lists=args.default_lists or args.exception_challenge,
         )
+        if args.timing_sensitivity_control:
+            metadata["comparison"]["timing_sensitivity"] = (
+                verify_timing_sensitivity(
+                    data, metadata["comparison"], dataset,
+                )
+            )
+            if metadata["comparison"]["verdict"].startswith("FAIL"):
+                pass
+            elif metadata["comparison"]["timing_sensitivity"]["visible_strong_signal"]:
+                metadata["comparison"]["verdict"] = (
+                    "SENSITIVITY-ONLY: strong artificial script-batch delay "
+                    "detected, never an engine speedup or baseline"
+                )
+            else:
+                metadata["comparison"]["verdict"] = (
+                    "FAIL: artificial script-batch delay not reliably detected"
+                )
         if args.exception_challenge:
             metadata["comparison"]["default_enabled_lists_only"] = False
             metadata["comparison"]["injected_filter_rules"] = len(challenge_rules)
@@ -1641,8 +1730,11 @@ def main():
                     derived_coverage["simple_host_rules_in_shard"],
                 )
             )
-        metadata["status"] = ("failed" if metadata["comparison"]["verdict"].startswith("FAIL")
-                              else "complete")
+        metadata["status"] = (
+            "failed" if metadata["comparison"]["verdict"].startswith("FAIL")
+            else "sensitivity_only" if args.timing_sensitivity_control
+            else "complete"
+        )
         return 1 if metadata["status"] == "failed" else 0
     except Exception as error:
         metadata["status"] = "failed"

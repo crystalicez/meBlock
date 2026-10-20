@@ -157,6 +157,16 @@ def verify_report_replay(report_path, dataset_path, report, *, default_lists):
             ]
             for role in ("upstream", "meblock")
         }
+        if (
+            report.get("timing_sensitivity_control_only") is True
+            or any(
+                type(run.get("timing_sensitivity_injected_batches")) is not int
+                or run["timing_sensitivity_injected_batches"] != 0
+                for role in ("upstream", "meblock")
+                for run in data[role]
+            )
+        ):
+            return False
         saved = report["comparison"]
         recalculated = compare(
             data, dataset,
@@ -188,6 +198,7 @@ def assess(correctness, default, memory, *, engine_verified=False,
         and type(correctness.get("fixture_version")) is int
         and correctness["fixture_version"] == FIXTURE_VERSION
         and correctness.get("default_enabled_lists_only") is False
+        and correctness.get("timing_sensitivity_control_only") is not True
         and correctness.get("injected_filter_rules", 0) > 0
         and all(c_behavior.get(name) is True for name in REQUIRED_BEHAVIOR)
         and c.get("verdict", "").startswith("CONTROL:")
@@ -195,6 +206,7 @@ def assess(correctness, default, memory, *, engine_verified=False,
     default_ready = (
         default.get("status") == "complete"
         and default.get("default_enabled_lists_only") is True
+        and default.get("timing_sensitivity_control_only") is not True
         and default.get("injected_filter_rules") == 0
         and d.get("builds_identical") is True
         and d.get("default_enabled_lists_only") is True

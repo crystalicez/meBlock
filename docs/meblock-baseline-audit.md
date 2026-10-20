@@ -135,6 +135,49 @@ evidence of a candidate speedup: both builds have identical engine
 bytes. Report neither these numbers as real-site p95 nor changes from
 the previous measurement schema as an optimization.
 
+### Disposable measured-timing sensitivity positive control
+
+A separate Firefox **three-pair positive control** deliberately adds
+**5 milliseconds to each script batch** in the *experimental probe only*
+(after all matchRequest calls, but before stopping the batch timer).
+This leaves source engine bytes, the selected default lists, and all
+block/modifier decisions unchanged. The measured median script-category
+amortized p95 increased from **27.1094 µs** in the untouched upstream
+instrumentation to **37.3047 µs** in the altered probe, an observed
+**1.3761×** signal. The instrument verified **1,152 injected script
+batches per experimental profile**, plus positive timing calibration and
+independent cross-profile consistency. The result is marked
+`SENSITIVITY-ONLY`, never `CONTROL` or a candidate gain, and has
+`status=sensitivity_only`. The baseline audit and per-profile replay
+explicitly reject such reports as normal screening evidence, even when
+correctness still passes.
+
+This proves that the test-only batched measurement **can notice a
+deliberate large timing disturbance**. It does not show actual matcher
+regression, addon-only CPU, request-level p95, sensitivity to small
+(3%) effects, or a deployable performance win. The normal independent
+three-pair control remains required with no injected delay.
+
+A separate **ordinary, zero-delay three-pair control** after the
+sensitivity experiment retained full correctness/decision parity but
+**failed** its predeclared timing-stability gate. Upstream overall
+amortized p95 cross-profile span was **5.56%**; meBlock was **70.87%**,
+with image, stylesheet and XHR cohort spans above **95%** in the
+meBlock profiles. The audit correctly returned NOT READY. Preserve
+this noisy outcome; do not delete a slow profile, change the 50%
+threshold, or represent the conditional instability as an engine
+regression. A fresh independent full three-pair repetition,
+with the **same corpus, unchanged default filter lists and no delay
+injection**, subsequently passed **11/11** baseline instrumentation
+gates and full Firefox per-profile replay. Its aggregate relative spans
+were **20.00% upstream / 4.45% meBlock**, with the largest type-level
+spans **47.37% upstream stylesheet / 25.00% meBlock stylesheet**,
+all within the existing 50% cutoff. **Both** the failed and passed
+complete runs are retained locally. The closeness of one category to
+the cutoff is a warning that this controlled screen is **not sensitive
+enough to support 3% optimization claims**. Independent different-build,
+adequately powered candidate/control experiments remain necessary.
+
 An existing gate verifies the **actual XPI files**, not merely
 their reported filter counts: SHA-256 of the stock XPI must equal the
 memory-control package hash, and each instrumented XPI must match its

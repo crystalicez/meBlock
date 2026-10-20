@@ -138,6 +138,11 @@ async function main() {
     // checked against a control decision outside the timed region.
     const batchIterations = 512;
     const batchPasses = 3;
+    const sensitivityOnly = config.sensitivity_control === true;
+    if (sensitivityOnly && config.role !== 'meblock') {
+        throw new Error('Timing sensitivity control must be applied only to the experimental role');
+    }
+    let sensitivityInjectedBatches = 0;
     const batchElapsed = [];
     const elapsedByType = new Map();
     const emptyLoopElapsed = [];
@@ -153,6 +158,17 @@ async function main() {
             for (let iteration = 0; iteration < batchIterations; iteration++) {
                 sfne.redirectURL = undefined;
                 observedSum += sfne.matchRequest(fctxt);
+            }
+            // Disposable sensitivity-only positive control: add a known
+            // 5ms delay after matching, inside the measured script batch.
+            // This measures detection of an artificial timing signal,
+            // not an engine regression or real request latency.
+            if (sensitivityOnly && row.cpt === 'script') {
+                const deadline = performance.now() + 5;
+                let clockChecks = 0;
+                while (performance.now() < deadline) { clockChecks++; }
+                if (clockChecks === 0) { throw new Error('Sensitivity delay did not execute'); }
+                sensitivityInjectedBatches++;
             }
             const elapsed = (performance.now() - begin) * 1000;
             if (!Number.isFinite(elapsed) || elapsed < 0) {
@@ -278,6 +294,7 @@ async function main() {
         engine_buffer_footprint: engineBuffers,
         request_latency: latency,
         batched_matcher: batchedMatcher,
+        timing_sensitivity_injected_batches: sensitivityInjectedBatches,
         outcomes,
         modifier_masks: modifierMasks,
         challenge_match_source_codes: challengeMatchSources || [],

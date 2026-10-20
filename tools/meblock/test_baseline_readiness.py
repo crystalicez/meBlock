@@ -298,6 +298,18 @@ class BaselineReadinessTests(unittest.TestCase):
         self.assertFalse(missing["ready_for_optimization"])
         self.assertFalse(missing["checks"]["per_request_type_amortized_p95_precision"])
 
+    def test_sensitivity_only_result_cannot_certify_baseline(self):
+        reports = list(evidence())
+        reports[1]["timing_sensitivity_control_only"] = True
+        outcome = assess(*reports, engine_verified=True, evidence_replayed=True)
+        self.assertFalse(outcome["ready_for_optimization"])
+        self.assertFalse(outcome["checks"]["unmodified_default_list_parity"])
+        reports[1]["timing_sensitivity_control_only"] = False
+        reports[1]["status"] = "sensitivity_only"
+        outcome = assess(*reports, engine_verified=True, evidence_replayed=True)
+        self.assertFalse(outcome["ready_for_optimization"])
+        self.assertFalse(outcome["checks"]["unmodified_default_list_parity"])
+
     def test_missing_data_fails_closed_without_echoing_private_fields(self):
         reports = list(evidence())
         reports[2]["raw_file"] = "private/path/browser-profile.json.gz"
@@ -441,7 +453,7 @@ class BaselineReadinessTests(unittest.TestCase):
             report_path = root / "report.json"
             for role in ("upstream", "meblock"):
                 (root / f"{role}-run-1.json").write_text(
-                    json.dumps({"test_value": 1}), encoding="utf-8",
+                    json.dumps({"test_value": 1, "timing_sensitivity_injected_batches": 0}), encoding="utf-8",
                 )
 
             def replay_comparison(data, rows, **kwargs):
@@ -473,7 +485,16 @@ class BaselineReadinessTests(unittest.TestCase):
                     report_path, dataset_path, changed, default_lists=False,
                 ))
                 (root / "upstream-run-1.json").write_text(
-                    json.dumps({"test_value": 2}), encoding="utf-8",
+                    json.dumps({
+                        "test_value": 1,
+                        "timing_sensitivity_injected_batches": 3,
+                    }), encoding="utf-8",
+                )
+                self.assertFalse(verify_report_replay(
+                    report_path, dataset_path, report, default_lists=False,
+                ))
+                (root / "upstream-run-1.json").write_text(
+                    json.dumps({"test_value": 2, "timing_sensitivity_injected_batches": 0}), encoding="utf-8",
                 )
                 self.assertFalse(verify_report_replay(
                     report_path, dataset_path, report, default_lists=False,

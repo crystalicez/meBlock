@@ -1224,6 +1224,123 @@ class PackageTests(unittest.TestCase):
                 )
                 self.assertIn(b"autoUpdate: false", archive.read("js/background.js"))
 
+    def test_sensitivity_xpis_leave_rules_unchanged_and_tag_only_experimental_role(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stock = b"! publicly synthetic base list\n||public.example.invalid^\n"
+            for role in ("upstream", "meblock"):
+                build = root / role
+                (build / "assets" / "ublock").mkdir(parents=True)
+                (build / "js").mkdir()
+                (build / "manifest.json").write_text(
+                    json.dumps({"browser_specific_settings": {
+                        "gecko": {"id": role + "@example.invalid"}
+                    }}), encoding="utf-8",
+                )
+                (build / "background.html").write_text(
+                    "<html><body></body></html>", encoding="utf-8",
+                )
+                (build / "js" / "static-net-filtering.js").write_text(
+                    "export default {};", encoding="utf-8",
+                )
+                (build / "js" / "background.js").write_text(
+                    "const defaults = {\n    autoUpdate: true,\n};",
+                    encoding="utf-8",
+                )
+                (build / "assets" / "ublock" / "filters.min.txt").write_bytes(
+                    stock
+                )
+                dest = root / (role + ".xpi")
+                runner.probe_package(
+                    build, dest, role, "http://127.0.0.1:9999",
+                    "disposable-test", b"[]", include_fixture_rules=False,
+                    timing_sensitivity_control=True,
+                )
+                with ZipFile(dest) as packaged:
+                    self.assertEqual(
+                        packaged.read("assets/ublock/filters.min.txt"), stock,
+                    )
+                    source = packaged.read("js/meblock-probe.js")
+                    expected = (
+                        b'"sensitivity_control": true'
+                        if role == "meblock"
+                        else b'"sensitivity_control": false'
+                    )
+                    self.assertIn(expected, source)
+                    self.assertIn(
+                        b'"precedence_cases": []', source,
+                    )
+            with self.assertRaisesRegex(ValueError, "default-list-only"):
+                runner.probe_package(
+                    root / "upstream", root / "invalid.xpi", "upstream",
+                    "http://127.0.0.1:9999", "disposable-test", b"[]",
+                    timing_sensitivity_control=True,
+                )
+
+    def test_sensitivity_cli_requires_isolated_three_pair_default_control(self):
+        rejected = (
+            ["--timing-sensitivity-control"],
+            ["--timing-sensitivity-control", "--default-lists", "--runs", "2"],
+            ["--timing-sensitivity-control", "--default-lists", "--runs", "3",
+             "--build-only"],
+            ["--timing-sensitivity-control", "--default-lists", "--runs", "3",
+             "--exception-challenge"],
+        )
+        for arguments in rejected:
+            with self.subTest(arguments=arguments):
+                with patch.object(
+                    runner.sys, "argv", ["compare_original.py", *arguments],
+                ), patch.object(
+                    runner.argparse.ArgumentParser, "error", side_effect=ValueError,
+                ):
+                    with self.assertRaises(ValueError):
+                        runner.main()
+
+    def test_sensitivity_control_detects_deliberate_script_only_delay(self):
+        dataset = [
+            {"cpt": cpt} for cpt in
+            ("script", "image", "stylesheet", "xmlhttprequest")
+        ]
+        def cohort(us, stable=True):
+            return {
+                "by_request_type": {
+                    "script": {
+                        "median_run_p95_amortized_context_us": us,
+                        "stable_three_profile_null_control": stable,
+                    }
+                }
+            }
+        summary = {
+            "batched_matcher": {
+                "upstream": cohort(27.0),
+                "meblock": cohort(37.0),
+            }
+        }
+        data = {
+            "upstream": [{"timing_sensitivity_injected_batches": 0} for _ in range(3)],
+            "meblock": [{"timing_sensitivity_injected_batches": 3} for _ in range(3)],
+        }
+        passed = runner.verify_timing_sensitivity(data, summary, dataset)
+        self.assertTrue(passed["visible_strong_signal"])
+        self.assertEqual(passed["injected_delay_per_script_batch_us"], 5000)
+        self.assertNotIn("example", json.dumps(passed))
+        summary["batched_matcher"]["meblock"] = cohort(29.0)
+        self.assertFalse(runner.verify_timing_sensitivity(
+            data, summary, dataset
+        )["visible_strong_signal"])
+        summary["batched_matcher"]["meblock"] = cohort(37.0, False)
+        self.assertFalse(runner.verify_timing_sensitivity(
+            data, summary, dataset
+        )["visible_strong_signal"])
+        data["meblock"][0]["timing_sensitivity_injected_batches"] = 0
+        with self.assertRaisesRegex(ValueError, "injection count"):
+            runner.verify_timing_sensitivity(data, summary, dataset)
+        with self.assertRaisesRegex(ValueError, "mixed default-list corpus"):
+            runner.verify_timing_sensitivity(
+                {"upstream": [], "meblock": []},
+                summary, dataset[:1],
+            )
+
     def test_challenge_rules_only_enter_disposable_correctness_xpi(self):
         with tempfile.TemporaryDirectory() as folder:
             build = Path(folder) / "test-build"

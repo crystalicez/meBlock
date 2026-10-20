@@ -457,6 +457,36 @@ per identical-build condition* plus the separate 300-second default-list
 CPU/RAM null control; one pair is diagnostic only. Cross-version A/B
 comparisons must preserve the same workload and method.
 
+## Deliberate timing-sensitivity positive control (disposable only)
+
+To test whether the current matcher-timing instrumentation can **notice
+a large, known slowdown**, run a separate full experiment:
+
+```powershell
+python tools/meblock/compare_original.py --default-lists --dataset dist/build/default-rule-probes-mixed.json --runs 3 --timing-sensitivity-control
+```
+
+This uses the same selected default filter lists and public synthetic request
+corpus without adding filters or modifying any production source. The
+experimental role's **test-only probe** adds exactly **5 milliseconds after
+each 512-lookup script batch**, *inside* that batch's wall-time measurement.
+Other request types and the upstream role are not deliberately changed.
+The analyzer verifies the injection count in every Firefox profile,
+preserves the independent behavioral oracle, and checks for a calibrated,
+stable script-category p95 at least **20% higher** than the unchanged
+reference. The injected 5 milliseconds are artificial measurement
+overhead—not a slow filter, not a change inside `matchRequest`, and
+not a real extension regression. A successful demonstration does **not**
+prove sensitivity to small (e.g. 3%) optimizations or regressions.
+
+The output report has `status=sensitivity_only`, a numeric
+`comparison.timing_sensitivity` diagnostic and an explicit
+`SENSITIVITY-ONLY` verdict. It is **never accepted** as a normal
+baseline, even when behavior matches and the signal is visible. The
+11-gate readiness audit excludes sensitivity-tagged profiles. Raw
+per-profile reports and the instrumented test XPIs remain ignored under
+`dist/build`; none belong in the public repository.
+
 ## Controlled Firefox page navigation p95
 
 The Firefox integration runner now measures a synthetic loopback page in
