@@ -333,13 +333,32 @@ def assess(correctness, default, memory, *, engine_verified=False,
 
     matcher_usable = default_ready and all(
         (matcher.get(role) or {}).get("schema") ==
-            "meblock-batched-context-match-summary-v1"
+            "meblock-batched-context-match-summary-v2"
         and (matcher[role].get("runs") or 0) >= 3
         and matcher[role].get("calibrated_for_amortized_screening") is True
         and type(matcher[role].get("median_run_p95_amortized_context_us"))
             in (int, float)
         and matcher[role]["median_run_p95_amortized_context_us"] > 0
         and stable_amortized_context(role)
+        for role in ("upstream", "meblock")
+    )
+    expected_types = {"script", "image", "xmlhttprequest", "stylesheet"}
+    per_type_precision = default_ready and request_type_breadth and all(
+        (matcher.get(role) or {}).get("schema") ==
+            "meblock-batched-context-match-summary-v2"
+        and isinstance(matcher[role].get("by_request_type"), dict)
+        and set(matcher[role]["by_request_type"]) == expected_types
+        and all(
+            entry.get("contexts_per_pass") == mix[kind]
+            and entry.get("samples_per_run") == 3 * mix[kind]
+            and entry.get("calibrated_for_amortized_screening") is True
+            and entry.get("stable_three_profile_null_control") is True
+            and type(entry.get("median_run_p95_amortized_context_us"))
+                in (float, int)
+            and math.isfinite(entry["median_run_p95_amortized_context_us"])
+            and entry["median_run_p95_amortized_context_us"] > 0
+            for kind, entry in matcher[role]["by_request_type"].items()
+        )
         for role in ("upstream", "meblock")
     )
     checks = {
@@ -353,6 +372,7 @@ def assess(correctness, default, memory, *, engine_verified=False,
         "per_profile_evidence_replay": evidence_replayed,
         "browser_local_resource_p95": local_resource_ready,
         "amortized_matcher_context_p95_precision": matcher_usable,
+        "per_request_type_amortized_p95_precision": per_type_precision,
     }
     return {
         "schema": "meblock-baseline-readiness-v1",

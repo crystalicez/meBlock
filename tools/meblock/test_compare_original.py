@@ -638,6 +638,72 @@ class CompareTests(unittest.TestCase):
             [{"batched_matcher": coarse}], 4,
         )["calibrated_for_amortized_screening"])
 
+    def test_batched_matcher_per_type_p95_detects_hidden_regression(self):
+        request_types = ["script", "image", "xmlhttprequest", "stylesheet"]
+        sample = {
+            "schema": "meblock-batched-context-match-v2",
+            "clock_step_us": 20, "contexts_per_pass": 4,
+            "passes": 3, "iterations_per_context": 512,
+            "sample_count": 12, "decision_mismatch_count": 0,
+            "minimum_batch_us": 400, "median_batch_us": 600,
+            "p95_batch_us": 1200, "p99_batch_us": 1500,
+            "maximum_batch_us": 1600,
+            "empty_loop_median_us": 10, "empty_loop_p95_us": 20,
+            "by_request_type": {
+                kind: {
+                    "sample_count": 3, "minimum_batch_us": 420,
+                    "p95_batch_us": 900, "maximum_batch_us": 1100,
+                }
+                for kind in request_types
+            },
+        }
+        good = runner.summarize_batched_matcher(
+            [{"batched_matcher": deepcopy(sample)} for _ in range(3)],
+            4, request_types,
+        )
+        self.assertEqual(good["schema"],
+                         "meblock-batched-context-match-summary-v2")
+        self.assertEqual(set(good["by_request_type"]), set(request_types))
+        self.assertTrue(all(
+            row["stable_three_profile_null_control"]
+            for row in good["by_request_type"].values()
+        ))
+        changed = deepcopy(sample)
+        changed["by_request_type"]["image"]["p95_batch_us"] = 1500
+        changed["by_request_type"]["image"]["maximum_batch_us"] = 1550
+        observed = runner.summarize_batched_matcher([
+            {"batched_matcher": sample}, {"batched_matcher": sample},
+            {"batched_matcher": changed},
+        ], 4, request_types)
+        self.assertTrue(observed["stable_three_profile_null_control"])
+        self.assertFalse(
+            observed["by_request_type"]["image"]["stable_three_profile_null_control"]
+        )
+        self.assertTrue(
+            observed["by_request_type"]["script"]["stable_three_profile_null_control"]
+        )
+        for mutation in ("missing", "count", "nonfinite", "unrecognized"):
+            invalid = deepcopy(sample)
+            if mutation == "missing":
+                invalid["by_request_type"].pop("stylesheet")
+            elif mutation == "count":
+                invalid["by_request_type"]["script"]["sample_count"] = 6
+            elif mutation == "nonfinite":
+                invalid["by_request_type"]["image"]["p95_batch_us"] = float("nan")
+            else:
+                invalid["by_request_type"]["unexpected"] = (
+                    invalid["by_request_type"]["script"]
+                )
+            with self.subTest(mutation=mutation):
+                with self.assertRaisesRegex(ValueError, "batched matcher"):
+                    runner.summarize_batched_matcher(
+                        [{"batched_matcher": invalid}], 4, request_types,
+                    )
+        with self.assertRaisesRegex(ValueError, "type provenance"):
+            runner.summarize_batched_matcher(
+                [{"batched_matcher": sample}], 4,
+            )
+
     def test_batched_matcher_cannot_disappear_from_one_build(self):
         upstream, fork = make_run(), make_run()
         sample = {

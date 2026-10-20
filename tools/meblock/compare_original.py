@@ -664,15 +664,20 @@ BATCHED_MATCHER_KEYS = (
 )
 
 
-def summarize_batched_matcher(series, request_count):
+def summarize_batched_matcher(series, request_count, request_types=None):
     readings = [row.get("batched_matcher") for row in series]
     if all(reading is None for reading in readings):
         return None
     for reading in readings:
         if (
             not isinstance(reading, dict)
-            or set(reading) != set(BATCHED_MATCHER_KEYS)
-            or reading["schema"] != "meblock-batched-context-match-v1"
+            or reading.get("schema") not in (
+                "meblock-batched-context-match-v1",
+                "meblock-batched-context-match-v2",
+            )
+            or set(reading) != set(BATCHED_MATCHER_KEYS) | (
+                {"by_request_type"} if reading["schema"].endswith("-v2") else set()
+            )
             or type(reading["contexts_per_pass"]) is not int
             or reading["contexts_per_pass"] != request_count
             or type(reading["passes"]) is not int or reading["passes"] != 3
@@ -700,6 +705,80 @@ def summarize_batched_matcher(series, request_count):
             or reading["empty_loop_median_us"] > reading["empty_loop_p95_us"]
         ):
             raise ValueError("Invalid batched matcher calibration or percentile")
+    if len({reading["schema"] for reading in readings}) != 1:
+        raise ValueError("Mixed batched matcher schemas across profiles")
+    expected_counts = (
+        Counter(request_types) if request_types is not None else None
+    )
+    by_type = {}
+    if readings[0]["schema"].endswith("-v2"):
+        if (expected_counts is None or sum(expected_counts.values()) != request_count
+            or any(not isinstance(name, str) or not name
+                   for name in expected_counts)):
+            raise ValueError("Missing batched matcher type provenance")
+        for reading in readings:
+            types = reading["by_request_type"]
+            if not isinstance(types, dict) or set(types) != set(expected_counts):
+                raise ValueError("Missing or unexpected batched matcher request type")
+            for name, count in expected_counts.items():
+                bucket = types[name]
+                if (
+                    not isinstance(bucket, dict)
+                    or set(bucket) != {
+                        "sample_count", "minimum_batch_us", "p95_batch_us",
+                        "maximum_batch_us",
+                    }
+                    or type(bucket["sample_count"]) is not int
+                    or bucket["sample_count"] != count * reading["passes"]
+                    or any(
+                        type(bucket[field]) not in (int, float)
+                        or not math.isfinite(bucket[field])
+                        or bucket[field] < 0
+                        for field in (
+                            "minimum_batch_us", "p95_batch_us",
+                            "maximum_batch_us",
+                        )
+                    )
+                    or not (reading["minimum_batch_us"] <=
+                            bucket["minimum_batch_us"] <= bucket["p95_batch_us"]
+                            <= bucket["maximum_batch_us"] <= reading["maximum_batch_us"])
+                ):
+                    raise ValueError("Invalid batched matcher per-type samples")
+        for name, count in sorted(expected_counts.items()):
+            estimates = [
+                reading["by_request_type"][name]["p95_batch_us"] /
+                reading["iterations_per_context"] for reading in readings
+            ]
+            median = statistics.median(estimates)
+            spread = (max(estimates) - min(estimates)) / median if median else math.inf
+            calibrated = all(
+                reading["clock_step_us"] > 0
+                and reading["by_request_type"][name]["minimum_batch_us"] >=
+                    reading["clock_step_us"] * 8
+                and reading["by_request_type"][name]["p95_batch_us"] >=
+                    reading["clock_step_us"] * 16
+                and reading["by_request_type"][name]["p95_batch_us"] >
+                    reading["empty_loop_p95_us"] * 4
+                for reading in readings
+            )
+            by_type[name] = {
+                "contexts_per_pass": count,
+                "samples_per_run": count * readings[0]["passes"],
+                "calibrated_for_amortized_screening": calibrated,
+                "stable_three_profile_null_control": (
+                    len(readings) >= 3 and calibrated and spread <= 0.5
+                ),
+                "relative_run_p95_span": (
+                    round(spread, 4) if math.isfinite(spread) else None
+                ),
+                "median_run_p95_amortized_context_us": (
+                    round(median, 4) if calibrated else None
+                ),
+                "range_run_p95_amortized_context_us": (
+                    [round(min(estimates), 4), round(max(estimates), 4)]
+                    if calibrated else None
+                ),
+            }
     suitable = all(
         sample["clock_step_us"] > 0
         and sample["minimum_batch_us"] >= sample["clock_step_us"] * 8
@@ -715,7 +794,11 @@ def summarize_batched_matcher(series, request_count):
     relative_span = (max(means) - min(means)) / run_median if run_median else math.inf
     stable = len(readings) >= 3 and suitable and relative_span <= 0.5
     return {
-        "schema": "meblock-batched-context-match-summary-v1",
+        "schema": (
+            "meblock-batched-context-match-summary-v2"
+            if by_type else "meblock-batched-context-match-summary-v1"
+        ),
+        "by_request_type": by_type if by_type else None,
         "runs": len(readings),
         "contexts_per_pass": request_count,
         "passes_per_run": 3,
@@ -907,7 +990,9 @@ def compare(data, dataset, identical_build=False, *, default_lists=False):
             "scope": request_latency_series["upstream"]["scope"],
         }
     batched_series = {
-        role: summarize_batched_matcher(data[role], len(dataset)) for role in ROLES
+        role: summarize_batched_matcher(
+            data[role], len(dataset), [row["cpt"] for row in dataset]
+        ) for role in ROLES
     }
     if (batched_series["upstream"] is None) != (batched_series["meblock"] is None):
         raise ValueError("Batched matcher measurements missing from one build")

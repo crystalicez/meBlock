@@ -95,6 +95,46 @@ measured path differ. The separate specific-engine-change gate remains
 NOT READY for broad network engine edits without the missing family
 fixtures.
 
+The **per-request-type amortized p95 precision** gate is the next
+measurement-hardening step. The updated test-only v2 Firefox probe
+retains aggregate batched-context timing and adds **numeric-only
+per-type sample counts, minimum, p95 and maximum elapsed batch
+durations**; there are no request URLs, raw filter text or browsing
+profiles in this measurement. The comparator checks exact type names
+and counts against the pinned corpus, rejects malformed/nonfinite data,
+and independently derives cross-profile p95 ranges for script, image,
+XHR and stylesheet. Every type must have a calibrated timer signal
+and meet the same predeclared **50% profile-spread ceiling**. The
+aggregate passing is no longer sufficient if even one request type
+fails. This v2 measurement requires **fresh Firefox evidence**;
+archived v1 batched data cannot certify it. The metric remains p95
+of per-context *amortized means*, not individual-call or real-site
+request p95, and category reweighting invalidates historical speed
+comparisons.
+
+The first complete v2 control on 2026-10-20 finished with **1,552
+default-list requests/profile**, 3 independent Firefox profiles/build,
+zero injected rules and all decisions/modifier masks equal. The
+**11/11 instrumentation-readiness checks passed** using new fixture-v9
+correctness evidence, all six new default-only profiles, complete
+per-profile replay, matching stock/instrumented XPI identities, and the
+existing pinned 300-second/three-pair process CPU/RAM control. The
+median run p95 by request type was:
+
+| Request type | Upstream amortized p95 (µs) | meBlock amortized p95 (µs) | Profile relative spans (upstream / meBlock) |
+| --- | ---: | ---: | ---: |
+| Script | 27.3047 | 27.2266 | 4.86% / 2.15% |
+| Image | 2.8125 | 2.7344 | 5.56% / 4.29% |
+| XHR | 5.6641 | 5.5859 | 4.14% / 1.40% |
+| Stylesheet | 1.6797 | 1.6406 | 4.65% / 2.38% |
+
+The aggregate across request types was about **7.9687 µs**, which
+would obscure the much more expensive synthetic script contexts.
+Neither the cross-type gaps nor the tiny cross-build differences are
+evidence of a candidate speedup: both builds have identical engine
+bytes. Report neither these numbers as real-site p95 nor changes from
+the previous measurement schema as an optimization.
+
 An existing gate verifies the **actual XPI files**, not merely
 their reported filter counts: SHA-256 of the stock XPI must equal the
 memory-control package hash, and each instrumented XPI must match its
@@ -129,13 +169,13 @@ reports and requires new isolated Firefox checks.
 
 ### Targeted hot-path family gate
 
-The ten checks above qualify the **measurement setup** only. Before
+The eleven checks above qualify the **measurement setup** only. Before
 modifying an engine hot path, append one or more
 `--target-family FAMILY-ID` arguments to the same command. The optional
-eleventh gate uses the **private per-profile correctness results**, not just
+twelfth gate uses the **private per-profile correctness results**, not just
 a matching summary: it checks independently expected positive and negative
 network outcomes per named case or per-index page-effect vectors, with the
-without-addon inverse controls. It also requires all ten baseline gates
+without-addon inverse controls. It also requires all eleven baseline gates
 and their replay to pass. For example, append
 `--target-family network-exceptions --target-family cosmetic-has` to
 require both families, or `--target-family network-wildcard-anchors` for
@@ -150,7 +190,7 @@ marks **seven unproven families**: other scriptlets, advanced network
 modifiers, cosmetic exceptions, list-update/compilation behavior, external
 list per-rule contexts, user-filter per-rule contexts and nested frames.
 Requesting one of these missing families exits **1**, even when the
-general baseline is 10/10 green. Mutation tests deliberately corrupt
+general baseline is 11/11 green. Mutation tests deliberately corrupt
 individual decisions and vectors to prove a targeted pass becomes a
 failure.
 
@@ -169,11 +209,13 @@ The historical `ready_for_optimization` field alone only indicates
 that the requested instrumentation/fixture screen passed, and must
 not be treated as permission to change any arbitrary engine module.
 
-With the earlier fixture v9 and archived Firefox 9/9 general evidence,
-`--target-family network-exceptions` passes the family diagnostic,
-whereas `--target-path src/js/static-net-filtering.js` correctly
-returns **NOT READY (9/10)** due to missing advanced-family/context
-oracles. A completely unmapped production file also fails. This
+With the earlier fixture-v9 and archived nine-gate evidence,
+`--target-family network-exceptions` passed its family diagnostic.
+The new fixture-v9 and per-type Firefox control also prove that
+`--target-path src/js/static-net-filtering.js` remains **NOT READY
+(11/12)** despite the general **11/11** screen passing: advanced
+modifier/context families still lack independent test oracles. A
+completely unmapped production file also fails. This
 does **not** claim exhaustive context coverage for supported families.
 Before changing such a hot path, add focused independent Firefox
 positive/near-miss and interaction cases for all affected unverified

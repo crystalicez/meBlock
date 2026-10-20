@@ -69,8 +69,22 @@ def evidence():
             },
             "batched_matcher": {
                 name: {
-                    "schema": "meblock-batched-context-match-summary-v1",
+                    "schema": "meblock-batched-context-match-summary-v2",
                     "runs": 3,
+                    "by_request_type": {
+                        kind: {
+                            "contexts_per_pass": count,
+                            "samples_per_run": count * 3,
+                            "calibrated_for_amortized_screening": True,
+                            "stable_three_profile_null_control": True,
+                            "median_run_p95_amortized_context_us": 2.3,
+                            "relative_run_p95_span": 0.01,
+                        }
+                        for kind, count in (
+                            ("script", 360), ("image", 360),
+                            ("xmlhttprequest", 360), ("stylesheet", 380),
+                        )
+                    },
                     "calibrated_for_amortized_screening": True,
                     "median_run_p95_amortized_context_us": 2.3,
                     "range_run_p95_amortized_context_us": [2.1, 2.5],
@@ -267,6 +281,22 @@ class BaselineReadinessTests(unittest.TestCase):
         status = assess(*reports, engine_verified=True, evidence_replayed=True)
         self.assertFalse(status["ready_for_optimization"])
         self.assertFalse(status["checks"]["pinned_runtime_inputs"])
+
+    def test_one_unstable_request_type_rejects_aggregate_p95_pass(self):
+        reports = list(evidence())
+        good = assess(*reports, engine_verified=True, evidence_replayed=True)
+        self.assertTrue(good["ready_for_optimization"])
+        changed = reports[1]["comparison"]["batched_matcher"]["meblock"]
+        changed["by_request_type"]["image"]["stable_three_profile_null_control"] = False
+        bad = assess(*reports, engine_verified=True, evidence_replayed=True)
+        self.assertFalse(bad["ready_for_optimization"])
+        self.assertTrue(bad["checks"]["amortized_matcher_context_p95_precision"])
+        self.assertFalse(bad["checks"]["per_request_type_amortized_p95_precision"])
+        changed["by_request_type"]["image"]["stable_three_profile_null_control"] = True
+        changed["by_request_type"].pop("stylesheet")
+        missing = assess(*reports, engine_verified=True, evidence_replayed=True)
+        self.assertFalse(missing["ready_for_optimization"])
+        self.assertFalse(missing["checks"]["per_request_type_amortized_p95_precision"])
 
     def test_missing_data_fails_closed_without_echoing_private_fields(self):
         reports = list(evidence())

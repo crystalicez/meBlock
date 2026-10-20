@@ -139,6 +139,7 @@ async function main() {
     const batchIterations = 512;
     const batchPasses = 3;
     const batchElapsed = [];
+    const elapsedByType = new Map();
     const emptyLoopElapsed = [];
     let batchDecisionMismatches = 0;
     let batchChecksum = 0;
@@ -160,6 +161,10 @@ async function main() {
             batchDecisionMismatches += observedSum !== expectedDecision * batchIterations;
             batchChecksum += observedSum;
             batchElapsed.push(elapsed);
+            if (!elapsedByType.has(row.cpt)) {
+                elapsedByType.set(row.cpt, []);
+            }
+            elapsedByType.get(row.cpt).push(elapsed);
         }
         for (let trial = 0; trial < 32; trial++) {
             let emptySum = 0;
@@ -178,8 +183,19 @@ async function main() {
     }
     batchElapsed.sort((a, b) => a - b);
     emptyLoopElapsed.sort((a, b) => a - b);
+    const batchedTypeSamples = {};
+    for (const [type, durations] of elapsedByType) {
+        durations.sort((a, b) => a - b);
+        batchedTypeSamples[type] = {
+            sample_count: durations.length,
+            minimum_batch_us: durations[0],
+            p95_batch_us: nearestRank(durations, 0.95),
+            maximum_batch_us: durations[durations.length - 1],
+        };
+    }
     const batchedMatcher = {
-        schema: 'meblock-batched-context-match-v1',
+        schema: 'meblock-batched-context-match-v2',
+        by_request_type: batchedTypeSamples,
         clock_step_us: latency.clock_step_us,
         contexts_per_pass: data.length,
         passes: batchPasses,

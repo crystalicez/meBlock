@@ -426,7 +426,7 @@ The existing `meblock-request-latency-v2` result is **retained as a
 diagnostic** and continues to report individual-call p95 as unusable when
 quantized. Do not interpret zero samples as zero-cost requests.
 
-The separate `meblock-batched-context-match-v1` probe repeats each fixed
+The separate `meblock-batched-context-match-v2` probe repeats each fixed
 request context **512 times in a timed batch** after setup. Every repeated
 decision is checked against its own control decision. It records three passes,
 clock-step calibration, empty-loop controls and fixed-order elapsed batches,
@@ -434,8 +434,19 @@ but publishes only aggregate numeric percentiles and no URLs or rule text.
 The Python validator requires exact field counts, finite ordered quantiles,
 consistent decisions, and batches at least eight clock steps long; the p95
 batch must exceed empty-loop p95 by fourfold and clock-step by sixteenfold.
-A failed calibration withholds the amortized result rather than issuing a
-misleading small latency.
+The updated report additionally summarizes per-type batch samples, with
+the exact count for each request type derived from the **pinned request
+dataset**, so a missing category or forged sample count fails validation.
+No URLs or raw filtering rules are included in the per-type metrics.
+
+A failed aggregate **or category-specific** calibration withholds that
+screening metric. In the balanced default-list corpus the readiness
+validator requires script, image, XHR and stylesheet to **each** have
+at least three independently measured Firefox profiles, calibrated
+per-type p95, and cross-profile p95 spread at most 50%. A stable
+aggregate can no longer hide an unstable request-type cohort.
+This does **not** provide individual-call p95 or represent production
+website traffic.
 
 `comparison.batched_matcher.*.median_run_p95_amortized_context_us` is the
 nearest-rank p95 **across per-context averages** (`batch elapsed / 512`),
