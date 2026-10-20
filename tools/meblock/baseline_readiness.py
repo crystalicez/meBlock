@@ -9,6 +9,7 @@ from pathlib import Path
 from zipfile import BadZipFile, ZipFile
 
 from browser_fixtures import FIXTURE_VERSION
+from coverage_matrix import FAMILY_IDS, family_coverage
 
 
 REQUIRED_BEHAVIOR = (
@@ -381,6 +382,10 @@ def main(argv=None):
     parser.add_argument("--memory-xpi", type=Path, required=True)
     parser.add_argument("--upstream-xpi", type=Path, required=True)
     parser.add_argument("--meblock-xpi", type=Path, required=True)
+    parser.add_argument(
+        "--target-family", choices=FAMILY_IDS, action="append",
+        help="Require independent Firefox coverage for an affected hot-path family",
+    )
     args = parser.parse_args(argv)
     try:
         correctness = read_local_report(args.correctness_report)
@@ -406,6 +411,28 @@ def main(argv=None):
             correctness, default, memory, engine_verified=verified,
             evidence_replayed=replayed,
         )
+        if args.target_family:
+            correctness_runs = {
+                role: [
+                    read_local_report(
+                        args.correctness_report.parent / f"{role}-run-{index}.json"
+                    )
+                    for index in range(1, correctness["runs_per_build"] + 1)
+                ]
+                for role in ("upstream", "meblock")
+            } if replayed else {}
+            coverage = family_coverage(correctness, correctness_runs)
+            requested = sorted(set(args.target_family))
+            selected = {name: coverage[name] for name in requested}
+            target_ready = (
+                result["ready_for_optimization"]
+                and all(item["verified"] is True for item in selected.values())
+            )
+            result["targeted_hot_path_coverage"] = selected
+            result["checks"]["targeted_hot_path_coverage"] = target_ready
+            if not target_ready:
+                result["unresolved"].append("targeted_hot_path_coverage")
+            result["ready_for_optimization"] = target_ready
     except (OSError, ValueError, UnicodeError, TypeError, AttributeError):
         print(json.dumps({
             "schema": "meblock-baseline-readiness-v1",

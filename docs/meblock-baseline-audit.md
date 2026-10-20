@@ -98,6 +98,37 @@ Correctness evidence must use the exact current browser fixture version
 (v9), so any changed synthetic network/cosmetic oracle invalidates stale
 reports and requires new isolated Firefox checks.
 
+### Targeted hot-path family gate
+
+The nine checks above qualify the **measurement setup** only. Before
+modifying an engine hot path, append one or more
+`--target-family FAMILY-ID` arguments to the same command. The optional
+tenth gate uses the **private per-profile correctness results**, not just
+a matching summary: it checks independently expected positive and negative
+network outcomes per named case or per-index page-effect vectors, with the
+without-addon inverse controls. It also requires all nine baseline gates
+and their replay to pass. For example, append
+`--target-family network-exceptions --target-family cosmetic-has` to
+require both families, or `--target-family network-wildcard-anchors` for
+the URL-pattern matching path.
+
+The public-safe matrix in `tools/meblock/coverage_matrix.py` currently
+distinguishes **17 covered fixture families** spanning hostname patterns,
+exceptions, type/party/domain/priority interactions, regexp/wildcards,
+cosmetic basic/relational/procedural selectors, `set-constant`, redirect,
+removeparam, dynamic firewall and settings persistence. It explicitly
+marks **seven unproven families**: other scriptlets, advanced network
+modifiers, cosmetic exceptions, list-update/compilation behavior, external
+list per-rule contexts, user-filter per-rule contexts and nested frames.
+Requesting one of these missing families exits **1**, even when the
+general baseline is 9/9 green. Mutation tests deliberately corrupt
+individual decisions and vectors to prove a targeted pass becomes a
+failure. This does **not** claim exhaustive context coverage for any
+family. Add a focused synthetic Firefox oracle and negative controls
+before optimizing a currently unproven family; do not downgrade the
+gate, silently substitute general parity, or add those fixture rules to
+default-list performance measurements.
+
 The remaining gates require a 300-second three-pair same-XPI CPU/RAM null
 control, real loopback script-resource timing, and a **calibrated amortized
 matcher-context p95** on three independent profiles per condition. The p95

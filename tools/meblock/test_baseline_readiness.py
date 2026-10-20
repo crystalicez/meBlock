@@ -450,7 +450,20 @@ class BaselineReadinessTests(unittest.TestCase):
     def test_report_loading_is_local_size_limited_and_cli_redacts_errors(self):
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory)
+            from browser_fixtures import (
+                PRECEDENCE_EXPECTED, WITHOUT_ADDON, PARAMETERS_WITHOUT_ADDON,
+            )
             reports = list(evidence())
+            reports[0]["runs_per_build"] = 1
+            reports[0]["unfiltered_fixture_control"] = {
+                "page": deepcopy(WITHOUT_ADDON),
+                "parameters": dict(PARAMETERS_WITHOUT_ADDON),
+            }
+            for role in ("upstream", "meblock"):
+                (folder / f"{role}-run-1.json").write_text(
+                    json.dumps({"fixture_precedence": list(PRECEDENCE_EXPECTED)}),
+                    encoding="utf-8",
+                )
             stock, paths = package_evidence(folder, reports[1], reports[2])
             for name, report in zip(("correctness", "default", "memory"), reports):
                 (folder / (name + ".json")).write_text(
@@ -468,6 +481,17 @@ class BaselineReadinessTests(unittest.TestCase):
             ]
             with patch("baseline_readiness.verify_report_replay", return_value=True):
                 self.assertEqual(main(args), 0)
+                target = [*args, "--target-family", "network-exceptions"]
+                self.assertEqual(main(target), 0)
+                self.assertEqual(
+                    main([*args, "--target-family", "scriptlet-other-families"]), 1,
+                )
+                changed = list(PRECEDENCE_EXPECTED)
+                changed[2] = 0
+                (folder / "upstream-run-1.json").write_text(
+                    json.dumps({"fixture_precedence": changed}), encoding="utf-8",
+                )
+                self.assertEqual(main(target), 1)
             path = folder / "correctness.json"
             path.write_text("{bad private payload", encoding="utf-8")
             with self.assertRaises(ValueError):
