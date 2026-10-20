@@ -8,6 +8,8 @@ import math
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile
 
+from browser_fixtures import FIXTURE_VERSION
+
 
 REQUIRED_BEHAVIOR = (
     "per_request_match",
@@ -183,7 +185,7 @@ def assess(correctness, default, memory, *, engine_verified=False,
     correctness_ready = (
         correctness.get("status") == "complete"
         and type(correctness.get("fixture_version")) is int
-        and correctness["fixture_version"] >= 8
+        and correctness["fixture_version"] == FIXTURE_VERSION
         and correctness.get("default_enabled_lists_only") is False
         and correctness.get("injected_filter_rules", 0) > 0
         and all(c_behavior.get(name) is True for name in REQUIRED_BEHAVIOR)
@@ -267,8 +269,14 @@ def assess(correctness, default, memory, *, engine_verified=False,
         isinstance(c_harness.get(name), str)
         and len(c_harness[name]) == 64
         and c_harness[name] == d_harness.get(name)
-        for name in ("browser_probe.js", "browser_fixtures.py",
-                     "state_probe.js", "engine_buffer_probe.js")
+        and c_harness[name] == hashlib.sha256(
+            Path(__file__).with_name(name).read_bytes()
+        ).hexdigest()
+        for name in (
+            "compare_original.py", "browser_probe.js", "engine_buffer_probe.js",
+            "state_probe.js", "browser_fixtures.py", "comparison_stats.py",
+            "benchmark_firefox.py", "filtering_benchmark.py",
+        )
     )
     inputs_ready = (
         default_ready and cpu_ready and correctness_ready and same_sources

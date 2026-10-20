@@ -162,26 +162,30 @@ measurement remains historical evidence for the unscreened corpus,
 not an unresolved product bug. No production filters or default-only
 RAM/performance inputs were changed.
 
-## Independent exception and precedence oracle (test-only fixture v8)
+## Independent exception and precedence oracle (test-only fixture v9)
 
-The non-default correctness comparison injects 23 **synthetic,
+The non-default correctness comparison injects 26 **synthetic,
 isolated** static-network rules in two disposable XPIs, and checks
-**39 fixed per-index expected decisions** (0 no match, 1 block, 2
+**46 fixed per-index expected decisions** (0 no match, 1 block, 2
 explicit allow). Beyond plain blocks, near misses and priority overrides,
 the cases cover combined request-type/party options, positive and negative
 `domain=` scopes, negated request types, first-party aliases, scoped
-exceptions with matching blocker controls, `from=`, and case-sensitive
-regex URL matching. `important` and `badfilter` remain covered.
+exceptions with matching blocker controls, `from=`, case-sensitive
+regex URL matching, URL wildcards, trailing `|` anchors and `^` separators.
+`important` and `badfilter` remain covered.
 
 Unlike agreement-only upstream/fork parity, these expectations are
 **independent of both engine outputs**. A missing vector, extra entry,
 non-integer decision or incorrect result at any index causes the Firefox
-run to fail. Fixture v8 also adds eight `:has-text()` procedural cosmetic
-rules, each with an independently checked hidden target and visible
-near-miss node, while retaining 96 ordinary cosmetic rules and 12
-`set-constant` scriptlets with per-index observations. A real Firefox
-upstream/meBlock A/B pair passed all 39 network decisions and browser-page
-assertions on 2026-10-20. This is correctness-only, not a timing claim.
+run to fail. Fixture v9 checks eight `:has-text()`, four `:has()`,
+and four `:matches-css()` procedural cosmetic rules, each with
+independently asserted present/hidden targets and visible near-miss
+controls; the fixture also retains 96 ordinary cosmetics, 32 visible
+controls and 12 `set-constant` scriptlets with per-index observations.
+The real Firefox upstream/meBlock A/B test passed the v9 network vector,
+browser-page effects and no-addon inverse controls on 2026-10-20. This
+is correctness-only; timings from these injected-rule XPIs are **not**
+part of default-list performance acceptance.
 
 The third-party test document is on a **different registrable site**
 from the target. An initial test mistakenly placed both document and
@@ -195,7 +199,7 @@ Run the existing correctness harness **without** `--default-lists`:
 python tools/meblock/compare_original.py --dataset dist/build/meblock-requests-coverage.json --runs 2
 ```
 
-These 23 network rules, 39 decision cases and eight procedural cosmetic
+These 26 network rules, 46 decision cases and sixteen procedural cosmetic
 rules are **never injected or executed** in `--default-lists` mode; that
 mode still checks only the real enabled subscription lists. Fixture precedence tests do not prove that all
 default-list exceptions behave correctly or cover every rule priority
@@ -447,7 +451,7 @@ independent, alternating Firefox profiles for comparisons. A same-build
 comparison is a negative control, not a speedup claim. The without-addon
 Firefox control also executes 20 measured navigations with the inverse
 blocking expectations, so the resource instrumentation itself must work
-without an installed extension. One real upstream/meBlock fixture-v8 pair
+without an installed extension. A real upstream/meBlock fixture-v9 pair
 and its unfiltered control passed this measurement on 2026-10-20.
 
 These are **controlled loopback document loads and script fetches**,

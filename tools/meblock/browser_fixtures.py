@@ -6,7 +6,7 @@ filter rules and expected observations form one versioned behavior contract.
 
 from base64 import b64decode
 
-FIXTURE_VERSION = 8
+FIXTURE_VERSION = 9
 
 DYNAMIC_FIREWALL_EXPECTED = {
     "block": 1,
@@ -57,6 +57,9 @@ PRECEDENCE_RULES = (
     "@@||mb-fixture-multiexception.example.invalid^$image,domain=mb-fixture-reader.example.invalid|~mb-fixture-excluded.example.invalid",
     r"/^https:\/\/mb-fixture-pathcase\.example\.invalid\/Blocked\.js$/$script,match-case",
     "||mb-fixture-from.example.invalid^$from=mb-fixture-reader.example.invalid",
+    "||mb-fixture-wildcard.example.invalid^*/asset-track-*.js$script",
+    "||mb-fixture-endanchor.example.invalid^matched.js|$script",
+    "||mb-fixture-separator.example.invalid^asset^$script",
 )
 
 # (name, request URL, document URL, request type, expected matchRequest decision)
@@ -102,6 +105,13 @@ PRECEDENCE_CASES = (
     ("match-case-wrong-type", "mb-fixture-pathcase", "reader", "image", 0, "/Blocked.js"),
     ("from-allowed-source", "mb-fixture-from", "mb-fixture-reader", "script", 1),
     ("from-other-source", "mb-fixture-from", "reader", "script", 0),
+    ("wildcard-path-positive", "mb-fixture-wildcard", "reader", "script", 1, "/dir/asset-track-17.js"),
+    ("wildcard-path-near-miss", "mb-fixture-wildcard", "reader", "script", 0, "/dir/asset-clean-17.js"),
+    ("wildcard-path-wrong-type", "mb-fixture-wildcard", "reader", "image", 0, "/dir/asset-track-17.js"),
+    ("end-anchor-exact", "mb-fixture-endanchor", "reader", "script", 1, "/matched.js"),
+    ("end-anchor-not-extension", "mb-fixture-endanchor", "reader", "script", 0, "/matched.js.map"),
+    ("separator-url", "mb-fixture-separator", "reader", "script", 1, "/asset?variant=1"),
+    ("separator-near-miss", "mb-fixture-separator", "reader", "script", 0, "/assetmore"),
 )
 
 
@@ -131,6 +141,8 @@ EXTRA_COSMETIC_COUNT = 96
 EXTRA_VISIBLE_COUNT = 32
 EXTRA_SCRIPTLET_COUNT = 12
 EXTRA_PROCEDURAL_COUNT = 8
+EXTRA_PROCEDURAL_HAS_COUNT = 4
+EXTRA_PROCEDURAL_CSS_COUNT = 4
 
 
 def extra_selector(index):
@@ -151,6 +163,12 @@ RULES += tuple(
 ) + tuple(
     f"127.0.0.1##.mb-procedural-{index:03}:has-text(mb-procedural-needle-{index:03})"
     for index in range(EXTRA_PROCEDURAL_COUNT)
+) + tuple(
+    f"127.0.0.1##.mb-procedural-has-{index:03}:has(.mb-procedural-child-{index:03})"
+    for index in range(EXTRA_PROCEDURAL_HAS_COUNT)
+) + tuple(
+    f"127.0.0.1##.mb-procedural-css-{index:03}:matches-css(color: rgb(17, 34, 51))"
+    for index in range(EXTRA_PROCEDURAL_CSS_COUNT)
 )
 
 
@@ -208,6 +226,26 @@ PAGE = PAGE.replace(
         f'<div id="mb-procedural-{index:03}-near" '
         f'class="mb-procedural-{index:03}">near-miss-{index:03}</div>'
         for index in range(EXTRA_PROCEDURAL_COUNT)
+    ) +
+    ''.join(
+        f'<div id="mb-procedural-has-{index:03}" class="mb-procedural-has-{index:03}">'
+        f'<span class="mb-procedural-child-{index:03}">child hit</span></div>'
+        for index in range(EXTRA_PROCEDURAL_HAS_COUNT)
+    ) +
+    ''.join(
+        f'<div id="mb-procedural-has-{index:03}-near" class="mb-procedural-has-{index:03}">'
+        '<span class="mb-procedural-other">near child</span></div>'
+        for index in range(EXTRA_PROCEDURAL_HAS_COUNT)
+    ) +
+    ''.join(
+        f'<div id="mb-procedural-css-{index:03}" class="mb-procedural-css-{index:03}" '
+        'style="color: rgb(17, 34, 51)">css hit</div>'
+        for index in range(EXTRA_PROCEDURAL_CSS_COUNT)
+    ) +
+    ''.join(
+        f'<div id="mb-procedural-css-{index:03}-near" class="mb-procedural-css-{index:03}" '
+        'style="color: rgb(51, 34, 17)">css near miss</div>'
+        for index in range(EXTRA_PROCEDURAL_CSS_COUNT)
     )
 )
 
@@ -282,6 +320,26 @@ const proceduralNearMissVisible = Array.from({ length: 8 }, (_, index) => {
     const element = document.getElementById('mb-procedural-' + suffix(index) + '-near');
     return Boolean(element && !hidden(element));
 });
+const hasProceduralPresent = Array.from({ length: 4 }, (_, index) =>
+    document.getElementById('mb-procedural-has-' + suffix(index)) !== null
+);
+const hasProceduralHidden = Array.from({ length: 4 }, (_, index) =>
+    isHidden('mb-procedural-has-' + suffix(index))
+);
+const hasProceduralNearMissVisible = Array.from({ length: 4 }, (_, index) => {
+    const element = document.getElementById('mb-procedural-has-' + suffix(index) + '-near');
+    return Boolean(element && !hidden(element));
+});
+const cssProceduralPresent = Array.from({ length: 4 }, (_, index) =>
+    document.getElementById('mb-procedural-css-' + suffix(index)) !== null
+);
+const cssProceduralHidden = Array.from({ length: 4 }, (_, index) =>
+    isHidden('mb-procedural-css-' + suffix(index))
+);
+const cssProceduralNearMissVisible = Array.from({ length: 4 }, (_, index) => {
+    const element = document.getElementById('mb-procedural-css-' + suffix(index) + '-near');
+    return Boolean(element && !hidden(element));
+});
 const scriptletApplied = Array.from({ length: 12 }, (_, index) =>
     window['mbFixtureVar' + suffix(index)] === true
 );
@@ -308,6 +366,12 @@ return {
     extra_procedural_present_by_index: proceduralPresent,
     extra_procedural_hidden_by_index: proceduralHidden,
     extra_procedural_near_miss_visible_by_index: proceduralNearMissVisible,
+    extra_procedural_has_present_by_index: hasProceduralPresent,
+    extra_procedural_has_hidden_by_index: hasProceduralHidden,
+    extra_procedural_has_near_miss_visible_by_index: hasProceduralNearMissVisible,
+    extra_procedural_css_present_by_index: cssProceduralPresent,
+    extra_procedural_css_hidden_by_index: cssProceduralHidden,
+    extra_procedural_css_near_miss_visible_by_index: cssProceduralNearMissVisible,
     extra_scriptlets_applied_by_index: scriptletApplied,
     extra_scriptlet_near_miss_untouched_by_index: scriptletNearMissUntouched,
     extra_cosmetic_hidden_count: cosmeticHidden.filter(Boolean).length,
@@ -337,6 +401,12 @@ WITHOUT_ADDON = {
     "extra_procedural_present_by_index": [True] * EXTRA_PROCEDURAL_COUNT,
     "extra_procedural_hidden_by_index": [False] * EXTRA_PROCEDURAL_COUNT,
     "extra_procedural_near_miss_visible_by_index": [True] * EXTRA_PROCEDURAL_COUNT,
+    "extra_procedural_has_present_by_index": [True] * EXTRA_PROCEDURAL_HAS_COUNT,
+    "extra_procedural_has_hidden_by_index": [False] * EXTRA_PROCEDURAL_HAS_COUNT,
+    "extra_procedural_has_near_miss_visible_by_index": [True] * EXTRA_PROCEDURAL_HAS_COUNT,
+    "extra_procedural_css_present_by_index": [True] * EXTRA_PROCEDURAL_CSS_COUNT,
+    "extra_procedural_css_hidden_by_index": [False] * EXTRA_PROCEDURAL_CSS_COUNT,
+    "extra_procedural_css_near_miss_visible_by_index": [True] * EXTRA_PROCEDURAL_CSS_COUNT,
     "extra_scriptlets_applied_by_index": [False] * EXTRA_SCRIPTLET_COUNT,
     "extra_scriptlet_near_miss_untouched_by_index": [True] * EXTRA_SCRIPTLET_COUNT,
     "extra_cosmetic_hidden_count": 0,
@@ -367,6 +437,8 @@ WITH_ADDON = {
     "scriptlet_applied": True,
     "extra_cosmetic_hidden_by_index": [True] * EXTRA_COSMETIC_COUNT,
     "extra_procedural_hidden_by_index": [True] * EXTRA_PROCEDURAL_COUNT,
+    "extra_procedural_has_hidden_by_index": [True] * EXTRA_PROCEDURAL_HAS_COUNT,
+    "extra_procedural_css_hidden_by_index": [True] * EXTRA_PROCEDURAL_CSS_COUNT,
     "extra_scriptlets_applied_by_index": [True] * EXTRA_SCRIPTLET_COUNT,
     "extra_cosmetic_hidden_count": EXTRA_COSMETIC_COUNT,
     "extra_scriptlets_applied_count": EXTRA_SCRIPTLET_COUNT,

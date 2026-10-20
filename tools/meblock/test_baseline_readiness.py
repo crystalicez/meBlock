@@ -19,9 +19,13 @@ def evidence():
     pins = {"upstream": "a" * 40, "meblock": "b" * 40}
     assets = {"main": "c" * 40, "prod": "d" * 40}
     probe_hashes = {
-        name: "e" * 64 for name in (
-            "browser_probe.js", "browser_fixtures.py", "state_probe.js",
-            "engine_buffer_probe.js",
+        name: hashlib.sha256(
+            Path(__file__).with_name(name).read_bytes()
+        ).hexdigest()
+        for name in (
+            "compare_original.py", "browser_probe.js", "engine_buffer_probe.js",
+            "state_probe.js", "browser_fixtures.py", "comparison_stats.py",
+            "benchmark_firefox.py", "filtering_benchmark.py",
         )
     }
     correctness = {
@@ -29,7 +33,7 @@ def evidence():
         "refs": pins,
         "assets": assets,
         "status": "complete",
-        "fixture_version": 8,
+        "fixture_version": 9,
         "default_enabled_lists_only": False,
         "injected_filter_rules": 147,
         "comparison": {
@@ -175,6 +179,8 @@ class BaselineReadinessTests(unittest.TestCase):
                 per_request_match=False), "independent_correctness_fixture"),
             (0, lambda value: value.update(fixture_version=6),
              "independent_correctness_fixture"),
+            (0, lambda value: value.update(fixture_version=8),
+             "independent_correctness_fixture"),
             (1, lambda value: value.update(injected_filter_rules=1),
              "unmodified_default_list_parity"),
             (1, lambda value: value["comparison"]["correctness"].update(
@@ -238,6 +244,14 @@ class BaselineReadinessTests(unittest.TestCase):
                 result = assess(*reports, engine_verified=True, evidence_replayed=True)
                 self.assertFalse(result["ready_for_optimization"])
                 self.assertIn(failed, result["unresolved"])
+
+    def test_two_matching_stale_harness_hashes_fail_against_current_files(self):
+        reports = list(evidence())
+        for report in reports[:2]:
+            report["harness_files_sha256"]["browser_fixtures.py"] = "0" * 64
+        status = assess(*reports, engine_verified=True, evidence_replayed=True)
+        self.assertFalse(status["ready_for_optimization"])
+        self.assertFalse(status["checks"]["pinned_runtime_inputs"])
 
     def test_missing_data_fails_closed_without_echoing_private_fields(self):
         reports = list(evidence())
