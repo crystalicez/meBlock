@@ -134,6 +134,8 @@ def _cohort_stats(profiles):
 
 
 def assess_null(null_report, dataset_path, memory_path, stock_xpi):
+    if not 0 < dataset_path.stat().st_size <= 16 * 1024 * 1024:
+        raise ValueError("Missing, empty, or oversized request dataset")
     raw = dataset_path.read_bytes()
     if len(raw) > 16 * 1024 * 1024:
         raise ValueError("Oversized request dataset")

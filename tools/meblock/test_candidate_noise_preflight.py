@@ -218,6 +218,21 @@ class NoisePreflightTests(unittest.TestCase):
                     payload["checks"]["calibrated_and_stable_batched_timings"]
                 )
 
+    def test_oversized_dataset_is_rejected_before_reading_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = Path(directory) / "oversized-private-dataset.json"
+            with dataset.open("wb") as stream:
+                stream.truncate(16 * 1024 * 1024 + 1)
+            with patch.object(Path, "read_bytes", side_effect=AssertionError(
+                "Dataset contents must not be read"
+            )):
+                with self.assertRaisesRegex(ValueError, "oversized"):
+                    preflight.assess_null(
+                        Path(directory) / "null.json", dataset,
+                        Path(directory) / "memory.json",
+                        Path(directory) / "stock.xpi",
+                    )
+
     def test_full_artifact_read_fails_closed_without_echoing_private_path(self):
         with tempfile.TemporaryDirectory() as directory:
             private = Path(directory) / "private-url-token.json"
