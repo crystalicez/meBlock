@@ -1270,6 +1270,9 @@ class PackageTests(unittest.TestCase):
                     self.assertIn(
                         b'"precedence_cases": []', source,
                     )
+            (root / "upstream" / "js" / "static-net-filtering.js").write_text(
+                "export default {};", encoding="utf-8",
+            )
             with self.assertRaisesRegex(ValueError, "default-list-only"):
                 runner.probe_package(
                     root / "upstream", root / "invalid.xpi", "upstream",
