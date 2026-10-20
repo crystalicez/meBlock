@@ -384,6 +384,34 @@ not baseline performance acceptance. The fixture covers eight
 scriptlets or normal user browsing. Only compare navigation timings with
 the **same fixture version** and equivalent pinned inputs.
 
+## Calibrated amortized matcher context p95 (test-only)
+
+Single `matchRequest` wall-time samples in this Firefox environment are
+often shorter than the `performance.now()` clock step (about 20 µs).
+The existing `meblock-request-latency-v2` result is **retained as a
+diagnostic** and continues to report individual-call p95 as unusable when
+quantized. Do not interpret zero samples as zero-cost requests.
+
+The separate `meblock-batched-context-match-v1` probe repeats each fixed
+request context **512 times in a timed batch** after setup. Every repeated
+decision is checked against its own control decision. It records three passes,
+clock-step calibration, empty-loop controls and fixed-order elapsed batches,
+but publishes only aggregate numeric percentiles and no URLs or rule text.
+The Python validator requires exact field counts, finite ordered quantiles,
+consistent decisions, and batches at least eight clock steps long; the p95
+batch must exceed empty-loop p95 by fourfold and clock-step by sixteenfold.
+A failed calibration withholds the amortized result rather than issuing a
+misleading small latency.
+
+`comparison.batched_matcher.*.median_run_p95_amortized_context_us` is the
+nearest-rank p95 **across per-context averages** (`batch elapsed / 512`),
+not p95 of individual calls, nor a claim about browser resource p95.
+It suppresses within-context jitter and includes loop/timer overhead.
+The readiness check requires at least three *independent Firefox profiles
+per identical-build condition* plus the separate 300-second default-list
+CPU/RAM null control; one pair is diagnostic only. Cross-version A/B
+comparisons must preserve the same workload and method.
+
 ## Controlled Firefox page navigation p95
 
 The Firefox integration runner now measures a synthetic loopback page in

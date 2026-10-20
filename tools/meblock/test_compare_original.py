@@ -564,6 +564,80 @@ class CompareTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Invalid count"):
             runner.summarize_candidate_effects(observation, 0)
 
+    def test_batched_matcher_calibration_fail_closed(self):
+        good = {
+            "schema": "meblock-batched-context-match-v1",
+            "clock_step_us": 20, "contexts_per_pass": 4,
+            "passes": 3, "iterations_per_context": 512,
+            "sample_count": 12, "decision_mismatch_count": 0,
+            "minimum_batch_us": 400, "median_batch_us": 600,
+            "p95_batch_us": 1200, "p99_batch_us": 1400,
+            "maximum_batch_us": 1600,
+            "empty_loop_median_us": 20, "empty_loop_p95_us": 40,
+        }
+        summary = runner.summarize_batched_matcher(
+            [{"batched_matcher": good}], 4,
+        )
+        self.assertTrue(summary["calibrated_for_amortized_screening"])
+        self.assertEqual(summary["median_run_p95_amortized_context_us"], 2.3438)
+        self.assertIn("not p95 of individual calls", summary["scope"])
+        control = runner.summarize_batched_matcher(
+            [{"batched_matcher": deepcopy(good)} for _ in range(3)], 4,
+        )
+        self.assertTrue(control["stable_three_profile_null_control"])
+        self.assertEqual(control["relative_run_p95_span"], 0.0)
+        changed = deepcopy(good)
+        changed["p95_batch_us"] = 2000
+        changed["p99_batch_us"] = 2100
+        changed["maximum_batch_us"] = 2300
+        unstable = runner.summarize_batched_matcher([
+            {"batched_matcher": good}, {"batched_matcher": good},
+            {"batched_matcher": changed},
+        ], 4)
+        self.assertFalse(unstable["stable_three_profile_null_control"])
+        for field, invalid in (
+            ("sample_count", 11), ("decision_mismatch_count", 1),
+            ("iterations_per_context", 2), ("p95_batch_us", float("nan")),
+            ("empty_loop_p95_us", float("inf")), ("minimum_batch_us", True),
+            ("median_batch_us", 1700),
+        ):
+            bad = deepcopy(good)
+            bad[field] = invalid
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, "batched matcher"):
+                    runner.summarize_batched_matcher([{"batched_matcher": bad}], 4)
+        coarse = deepcopy(good)
+        coarse["minimum_batch_us"] = 30
+        coarse["median_batch_us"] = 60
+        self.assertFalse(runner.summarize_batched_matcher(
+            [{"batched_matcher": coarse}], 4,
+        )["calibrated_for_amortized_screening"])
+
+    def test_batched_matcher_cannot_disappear_from_one_build(self):
+        upstream, fork = make_run(), make_run()
+        sample = {
+            "schema": "meblock-batched-context-match-v1",
+            "clock_step_us": 20, "contexts_per_pass": 3,
+            "passes": 3, "iterations_per_context": 512,
+            "sample_count": 9, "decision_mismatch_count": 0,
+            "minimum_batch_us": 400, "median_batch_us": 500,
+            "p95_batch_us": 900, "p99_batch_us": 1000,
+            "maximum_batch_us": 1100,
+            "empty_loop_median_us": 10, "empty_loop_p95_us": 20,
+        }
+        upstream["batched_matcher"] = sample
+        with self.assertRaisesRegex(ValueError, "missing from one build"):
+            runner.compare({"upstream": [upstream], "meblock": [fork]}, DATASET)
+        fork["batched_matcher"] = deepcopy(sample)
+        result = runner.compare(
+            {"upstream": [upstream], "meblock": [fork]}, DATASET,
+            identical_build=True,
+        )
+        self.assertEqual(
+            result["batched_matcher"]["upstream"]["median_run_p95_amortized_context_us"],
+            round(900 / 512, 4),
+        )
+
     def test_request_latency_nearest_rank_validator_rejects_bad_samples(self):
         baseline = {
             "schema": "meblock-request-latency-v2", "clock_step_us": 0.5,

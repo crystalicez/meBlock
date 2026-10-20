@@ -132,6 +132,69 @@ async function main() {
         empty_timer_pair_p95_us: nearestRank(clockReadSamples, 0.95),
     };
 
+    // Amortized wall time per fixed request context, NOT single-call tail latency.
+    // Each timed batch repeats a stable lookup many times to rise above the
+    // approximately 20-us Firefox clock step. Every result is consumed and
+    // checked against a control decision outside the timed region.
+    const batchIterations = 512;
+    const batchPasses = 3;
+    const batchElapsed = [];
+    const emptyLoopElapsed = [];
+    let batchDecisionMismatches = 0;
+    let batchChecksum = 0;
+    for (let pass = 0; pass < batchPasses; pass++) {
+        for (const row of data) {
+            prepareContext(fctxt, row);
+            sfne.redirectURL = undefined;
+            const expectedDecision = sfne.matchRequest(fctxt);
+            let observedSum = 0;
+            const begin = performance.now();
+            for (let iteration = 0; iteration < batchIterations; iteration++) {
+                sfne.redirectURL = undefined;
+                observedSum += sfne.matchRequest(fctxt);
+            }
+            const elapsed = (performance.now() - begin) * 1000;
+            if (!Number.isFinite(elapsed) || elapsed < 0) {
+                throw new Error('Invalid batched matcher elapsed time');
+            }
+            batchDecisionMismatches += observedSum !== expectedDecision * batchIterations;
+            batchChecksum += observedSum;
+            batchElapsed.push(elapsed);
+        }
+        for (let trial = 0; trial < 32; trial++) {
+            let emptySum = 0;
+            const began = performance.now();
+            for (let iteration = 0; iteration < batchIterations; iteration++) {
+                emptySum += iteration & 1;
+            }
+            emptyLoopElapsed.push((performance.now() - began) * 1000);
+            if (emptySum !== batchIterations / 2) {
+                throw new Error('Empty-loop control did not execute');
+            }
+        }
+    }
+    if (batchChecksum < 0 || batchDecisionMismatches !== 0) {
+        throw new Error('Batched matcher result changed across repeated calls');
+    }
+    batchElapsed.sort((a, b) => a - b);
+    emptyLoopElapsed.sort((a, b) => a - b);
+    const batchedMatcher = {
+        schema: 'meblock-batched-context-match-v1',
+        clock_step_us: latency.clock_step_us,
+        contexts_per_pass: data.length,
+        passes: batchPasses,
+        iterations_per_context: batchIterations,
+        sample_count: batchElapsed.length,
+        decision_mismatch_count: batchDecisionMismatches,
+        minimum_batch_us: batchElapsed[0],
+        median_batch_us: nearestRank(batchElapsed, 0.5),
+        p95_batch_us: nearestRank(batchElapsed, 0.95),
+        p99_batch_us: nearestRank(batchElapsed, 0.99),
+        maximum_batch_us: batchElapsed[batchElapsed.length - 1],
+        empty_loop_median_us: nearestRank(emptyLoopElapsed, 0.5),
+        empty_loop_p95_us: nearestRank(emptyLoopElapsed, 0.95),
+    };
+
     const outcomes = [];
     const modifierMasks = [];
     // This emits only bit codes, never the matched filter's text or URL.
@@ -198,6 +261,7 @@ async function main() {
         us_per_request: elapsed * 1000 / (data.length * timedPasses),
         engine_buffer_footprint: engineBuffers,
         request_latency: latency,
+        batched_matcher: batchedMatcher,
         outcomes,
         modifier_masks: modifierMasks,
         challenge_match_source_codes: challengeMatchSources || [],

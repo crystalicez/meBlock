@@ -655,6 +655,98 @@ def summarize_request_latency(series, request_count):
     }
 
 
+BATCHED_MATCHER_KEYS = (
+    "schema", "clock_step_us", "contexts_per_pass", "passes",
+    "iterations_per_context", "sample_count", "decision_mismatch_count",
+    "minimum_batch_us", "median_batch_us", "p95_batch_us", "p99_batch_us",
+    "maximum_batch_us", "empty_loop_median_us", "empty_loop_p95_us",
+)
+
+
+def summarize_batched_matcher(series, request_count):
+    readings = [row.get("batched_matcher") for row in series]
+    if all(reading is None for reading in readings):
+        return None
+    for reading in readings:
+        if (
+            not isinstance(reading, dict)
+            or set(reading) != set(BATCHED_MATCHER_KEYS)
+            or reading["schema"] != "meblock-batched-context-match-v1"
+            or type(reading["contexts_per_pass"]) is not int
+            or reading["contexts_per_pass"] != request_count
+            or type(reading["passes"]) is not int or reading["passes"] != 3
+            or type(reading["iterations_per_context"]) is not int
+            or reading["iterations_per_context"] < 128
+            or reading["iterations_per_context"] > 4096
+            or type(reading["sample_count"]) is not int
+            or reading["sample_count"] != reading["passes"] * request_count
+            or type(reading["decision_mismatch_count"]) is not int
+            or reading["decision_mismatch_count"] != 0
+        ):
+            raise ValueError("Invalid batched matcher sample structure")
+        numeric = (
+            "clock_step_us", "minimum_batch_us", "median_batch_us",
+            "p95_batch_us", "p99_batch_us", "maximum_batch_us",
+            "empty_loop_median_us", "empty_loop_p95_us",
+        )
+        if (
+            any(type(reading[key]) not in (int, float)
+                or not math.isfinite(reading[key]) or reading[key] < 0
+                for key in numeric)
+            or not (reading["minimum_batch_us"] <= reading["median_batch_us"]
+                    <= reading["p95_batch_us"] <= reading["p99_batch_us"]
+                    <= reading["maximum_batch_us"])
+            or reading["empty_loop_median_us"] > reading["empty_loop_p95_us"]
+        ):
+            raise ValueError("Invalid batched matcher calibration or percentile")
+    suitable = all(
+        sample["clock_step_us"] > 0
+        and sample["minimum_batch_us"] >= sample["clock_step_us"] * 8
+        and sample["p95_batch_us"] >= sample["clock_step_us"] * 16
+        and sample["p95_batch_us"] > sample["empty_loop_p95_us"] * 4
+        for sample in readings
+    )
+    means = [
+        sample["p95_batch_us"] / sample["iterations_per_context"]
+        for sample in readings
+    ]
+    run_median = statistics.median(means)
+    relative_span = (max(means) - min(means)) / run_median if run_median else math.inf
+    stable = len(readings) >= 3 and suitable and relative_span <= 0.5
+    return {
+        "schema": "meblock-batched-context-match-summary-v1",
+        "runs": len(readings),
+        "contexts_per_pass": request_count,
+        "passes_per_run": 3,
+        "samples_per_run": readings[0]["sample_count"],
+        "iterations_per_context_range": [
+            min(s["iterations_per_context"] for s in readings),
+            max(s["iterations_per_context"] for s in readings),
+        ],
+        "calibrated_for_amortized_screening": suitable,
+        "stable_three_profile_null_control": stable,
+        "relative_run_p95_span": (
+            round(relative_span, 4) if math.isfinite(relative_span) else None
+        ),
+        "median_run_p95_amortized_context_us": (
+            round(statistics.median(means), 4) if suitable else None
+        ),
+        "range_run_p95_amortized_context_us": (
+            [round(min(means), 4), round(max(means), 4)] if suitable else None
+        ),
+        "minimum_batch_to_clock_step_ratio": round(min(
+            s["minimum_batch_us"] / s["clock_step_us"]
+            if s["clock_step_us"] else 0 for s in readings
+        ), 3),
+        "scope": (
+            "Nearest-rank p95 over per-context AMORTIZED means from repeated "
+            "matchRequest calls. Setup excluded; includes loop and timer overhead. "
+            "This is not p95 of individual calls, browser requests, CPU time, "
+            "or real-site tail latency; jitter inside each batch is hidden."
+        ),
+    }
+
+
 ENGINE_BUFFER_KEYS = ("filter_data", "origin_trie", "destination_trie", "pattern_trie")
 WASM_BUFFER_KEYS = ENGINE_BUFFER_KEYS[1:]
 
@@ -813,6 +905,18 @@ def compare(data, dataset, identical_build=False, *, default_lists=False):
             "meblock": request_latency_series["meblock"],
             "scope": request_latency_series["upstream"]["scope"],
         }
+    batched_series = {
+        role: summarize_batched_matcher(data[role], len(dataset)) for role in ROLES
+    }
+    if (batched_series["upstream"] is None) != (batched_series["meblock"] is None):
+        raise ValueError("Batched matcher measurements missing from one build")
+    batched_matcher = None
+    if batched_series["upstream"] is not None:
+        batched_matcher = {
+            "upstream": batched_series["upstream"],
+            "meblock": batched_series["meblock"],
+            "scope": batched_series["upstream"]["scope"],
+        }
     navigation_series = {
         label: [row.get("fixture_navigation") for row in data[label]]
         for label in ROLES
@@ -912,6 +1016,7 @@ def compare(data, dataset, identical_build=False, *, default_lists=False):
         "injected_filter_rules": 0 if default_lists else len(RULES),
         "paired_performance": paired,
         "request_latency": request_latency,
+        "batched_matcher": batched_matcher,
         "fixture_navigation": fixture_navigation,
         "engine_buffer_footprint": engine_buffers,
         "upstream": left,

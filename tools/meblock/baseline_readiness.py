@@ -99,8 +99,18 @@ def assess(correctness, default, memory):
                 and c_assets[name] == d_assets.get(name)
                 for name in asset_pins)
     )
+    c_harness = correctness.get("harness_files_sha256") or {}
+    d_harness = default.get("harness_files_sha256") or {}
+    matching_probes = all(
+        isinstance(c_harness.get(name), str)
+        and len(c_harness[name]) == 64
+        and c_harness[name] == d_harness.get(name)
+        for name in ("browser_probe.js", "browser_fixtures.py",
+                     "state_probe.js", "engine_buffer_probe.js")
+    )
     inputs_ready = (
         default_ready and cpu_ready and correctness_ready and same_sources
+        and matching_probes
         and identity.get("network_filters") == buffers.get("compiled_network_filters")
         and identity.get("selected_list_keys_sha256") ==
         coverage.get("selected_list_keys_sha256")
@@ -122,15 +132,33 @@ def assess(correctness, default, memory):
         and len(control["navigation"]) == 20
         and all(valid_navigation_sample(sample) for sample in control["navigation"])
     )
-    matcher = d.get("request_latency") or {}
-    matcher_usable = (
-        default_ready
-        and all(
-            (matcher.get(role) or {}).get(
-                "precision_usable_for_instrumented_screening"
-            ) is True
-            for role in ("upstream", "meblock")
+    matcher = d.get("batched_matcher") or {}
+
+    def stable_amortized_context(role):
+        record = matcher.get(role) or {}
+        observed = record.get("range_run_p95_amortized_context_us")
+        median = record.get("median_run_p95_amortized_context_us")
+        return (
+            isinstance(observed, list) and len(observed) == 2
+            and all(type(n) in (int, float) and math.isfinite(n) and n > 0
+                    for n in observed)
+            and observed[0] <= observed[1]
+            and type(median) in (int, float) and math.isfinite(median)
+            and observed[0] <= median <= observed[1]
+            and median > 0
+            and (observed[1] - observed[0]) / median <= 0.5
         )
+
+    matcher_usable = default_ready and all(
+        (matcher.get(role) or {}).get("schema") ==
+            "meblock-batched-context-match-summary-v1"
+        and (matcher[role].get("runs") or 0) >= 3
+        and matcher[role].get("calibrated_for_amortized_screening") is True
+        and type(matcher[role].get("median_run_p95_amortized_context_us"))
+            in (int, float)
+        and matcher[role]["median_run_p95_amortized_context_us"] > 0
+        and stable_amortized_context(role)
+        for role in ("upstream", "meblock")
     )
     checks = {
         "independent_correctness_fixture": correctness_ready,
@@ -138,7 +166,7 @@ def assess(correctness, default, memory):
         "paired_cpu_memory_null_control": cpu_ready,
         "pinned_runtime_inputs": inputs_ready,
         "browser_local_resource_p95": local_resource_ready,
-        "instrumented_matcher_p95_precision": matcher_usable,
+        "amortized_matcher_context_p95_precision": matcher_usable,
     }
     return {
         "schema": "meblock-baseline-readiness-v1",
@@ -147,8 +175,9 @@ def assess(correctness, default, memory):
         "unresolved": [key for key, value in checks.items() if not value],
         "scope": (
             "This gate validates synthetic Firefox correctness and local default-list "
-            "baseline evidence; it does not prove every rule, real-site tail latency, "
-            "addon-only CPU/RAM attribution, or a candidate speedup."
+            "baseline evidence; batched-context p95 is NOT individual-call p95. "
+            "It does not prove every rule, real-site tail latency, addon-only "
+            "CPU/RAM attribution, or a candidate speedup."
         ),
     }
 

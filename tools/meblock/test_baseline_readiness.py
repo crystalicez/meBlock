@@ -12,7 +12,14 @@ from baseline_readiness import REQUIRED_BEHAVIOR, assess, main, read_local_repor
 def evidence():
     pins = {"upstream": "a" * 40, "meblock": "b" * 40}
     assets = {"main": "c" * 40, "prod": "d" * 40}
+    probe_hashes = {
+        name: "e" * 64 for name in (
+            "browser_probe.js", "browser_fixtures.py", "state_probe.js",
+            "engine_buffer_probe.js",
+        )
+    }
     correctness = {
+        "harness_files_sha256": dict(probe_hashes),
         "refs": pins,
         "assets": assets,
         "status": "complete",
@@ -25,6 +32,7 @@ def evidence():
         },
     }
     default = {
+        "harness_files_sha256": dict(probe_hashes),
         "refs": dict(pins),
         "assets": dict(assets),
         "status": "complete",
@@ -45,8 +53,14 @@ def evidence():
                 }
                 for name in ("upstream", "meblock")
             },
-            "request_latency": {
-                name: {"precision_usable_for_instrumented_screening": True}
+            "batched_matcher": {
+                name: {
+                    "schema": "meblock-batched-context-match-summary-v1",
+                    "runs": 3,
+                    "calibrated_for_amortized_screening": True,
+                    "median_run_p95_amortized_context_us": 2.3,
+                    "range_run_p95_amortized_context_us": [2.1, 2.5],
+                }
                 for name in ("upstream", "meblock")
             },
         },
@@ -121,10 +135,17 @@ class BaselineReadinessTests(unittest.TestCase):
                 "navigation"][0].update(
                     allowed_script_resource_duration_ms=0),
              "browser_local_resource_p95"),
-            (1, lambda value: value["comparison"]["request_latency"][
+            (1, lambda value: value["comparison"]["batched_matcher"][
                 "meblock"].update(
-                    precision_usable_for_instrumented_screening=False),
-             "instrumented_matcher_p95_precision"),
+                    calibrated_for_amortized_screening=False),
+             "amortized_matcher_context_p95_precision"),
+            (1, lambda value: value["comparison"]["batched_matcher"][
+                "meblock"].update(runs=1),
+             "amortized_matcher_context_p95_precision"),
+            (1, lambda value: value["comparison"]["batched_matcher"][
+                "upstream"].update(
+                    range_run_p95_amortized_context_us=[1.0, 4.0]),
+             "amortized_matcher_context_p95_precision"),
             (2, lambda value: value.update(pairs=1),
              "paired_cpu_memory_null_control"),
             (2, lambda value: value["idle_firefox_cpu"].update(
@@ -136,6 +157,9 @@ class BaselineReadinessTests(unittest.TestCase):
                 process_pid_churn_observed=True),
              "paired_cpu_memory_null_control"),
             (1, lambda value: value["refs"].update(upstream="other"),
+             "pinned_runtime_inputs"),
+            (1, lambda value: value["harness_files_sha256"].update(
+                **{"browser_probe.js": "bad"}),
              "pinned_runtime_inputs"),
             (2, lambda value: value["pinned_profile_identity"].update(
                 network_filters=252244), "pinned_runtime_inputs"),

@@ -33,7 +33,8 @@ No performance change is justified solely by that estimate.
 | Per-rule cosmetic/scriptlet browser behavior | Verified for fixed synthetic cases; broader scriptlet and procedural families remain | Fixture v8 checks per-index presence/hiding/near-miss vectors for 96 ordinary cosmetic selectors and eight `:has-text()` procedural selectors, 32 independent visible controls, and 12 `set-constant` scriptlets with 12 untouched near-miss properties. One fresh upstream/meBlock Firefox pair passed; previous fixture v5 passed two pairs on its smaller coverage. Missing nodes and wrong indices fail regardless of counts; no-addon inverse controls are checked |
 | Extra 600k synthetic rules | No longer required for baseline | The prior hostname-heavy and mixed-network synthetic experiments remain opt-in stress-test tools only; they are **not** part of current default-list RAM or performance acceptance. No private subscriptions are copied |
 | Local Firefox navigation and script-resource p95 | **Real Firefox v8 fixture and default-only control both verified; not representative real-site latency** | Browser `PerformanceNavigationTiming` and `PerformanceResourceTiming` record 20 navigations plus exactly one no-store allowed-script fetch per navigation after two warm-ups, checking behavior each visit. The unfiltered no-addon control now measures the same resource with inverse blocking expectations. On 2026-10-20, one default-list Firefox A/B pair with 1,460 requests per profile and zero added filters passed; local script-resource p95 was 21.66 ms versus 30.42 ms. These single-run values are noise-prone and **not** a speedup or real-world request-level p95 |
-| Request latency confidence | Test-only instrumented matcher tail latency under calibration; not yet accepted | Test probes sample `matchRequest` individually over three passes, separately from page-navigation p95, and record clock quantization/overhead. Disposable Firefox profiles alone disable timer precision reduction. Earlier unmodified timer rounded most sub-ms requests to zero; no production website request p95 or reliable per-addon CPU result yet. A timer-quality gate withholds unresolved p95 rather than claiming accuracy |
+| Individual-call matcher p95 | **Not resolved by Firefox timer granularity** | The original `meblock-request-latency-v2` instrumented probe measures single calls, but Firefox's ~20 µs clock steps quantize many results. Its precision gate still withholds an individual-call p95. Never present zeros as zero execution time |
+| Amortized matcher context p95 | **Verified in three real Firefox default-only pairs** | The test-only probe repeats each request context 512 times, checks decisions on every repetition, measures timer and empty-loop controls, and reports p95 of amortized per-context means, **not individual-call tail latency**. In six disposable Firefox profiles, 1,460 contexts/profile and zero injected rules, median run p95 was **27.2656 µs upstream and 27.3828 µs meBlock**; ranges **26.7188–27.5** and **27.3047–30.1562 µs** respectively. Minimum timed batches spanned at least 18 clock steps. Both p95 ranges pass the predeclared 50% cross-profile spread gate. The runs are same-code CONTROL only, never evidence of a speedup |
 | WASM vs JS/native retained allocations | **Not yet** | Process `explicit` aggregates unrelated runtime allocations. Without validated heap/WASM attribution it is unsafe to decide which representation to optimize |
 | CI and public privacy | Verified for unit tests and local guard | The Windows regression workflow runs **only on manual dispatch**, not push or pull requests. It checks unit tests, Node syntax and privacy guard. Raw `about:memory` and regression JSON artifacts are never uploaded. Force-adding any file under `dist/build/` is rejected by the guard. The **optional** full Firefox integration job has not been proven on GitHub's hosted runner |
 
@@ -54,8 +55,10 @@ incomplete, and **2** for unreadable or invalid evidence. It validates
 independently asserted correctness, no added rules in default-list mode,
 matching upstream/fork and public asset revisions, filter-list fingerprints,
 a 300-second three-pair same-XPI CPU/RAM null control, a real browser
-loopback script-resource p95, and sufficient precision in the separately
-instrumented matcher p95. Unlike a human checklist, the gate fails closed on
+loopback script-resource p95, and a **calibrated amortized matcher-context
+p95** tested on three independent Firefox sessions per condition. The p95
+must have at most 50% relative range across those sessions. Unlike a human
+checklist, the gate fails closed on
 missing evidence and prints only check names and statuses, never raw memory
 reporter data, browsing hosts, file paths, or filter text.
 
@@ -64,18 +67,28 @@ usable evidence for an experiment. It does **not** prove coverage of every
 network/cosmetic rule, representative real-site p95, addon-exclusive CPU or
 RAM, or that an optimized candidate is safe to ship. A change to the
 filtering engine requires its own affected-rule regression fixtures and
-repeatable independent upstream/candidate A/B runs. An instrumented matcher
-p95 that Firefox quantizes too coarsely is `NOT READY`, not a zero-microsecond
-performance measurement.
+repeatable independent upstream/candidate A/B runs. An individual-call
+matcher p95 that Firefox quantizes too coarsely remains unavailable; the
+calibrated batched-context p95 is a **different screening metric**, not a
+replacement with the same interpretation.
 
-On 2026-10-20, the real Firefox fixture-v8, default-only and
-three-pair/300-second CPU/RAM null-control reports passed **five of six**
-readiness checks. The remaining blocker is `instrumented_matcher_p95_precision`:
-the Firefox timer's approximately 20-microsecond step is too coarse to
-support a credible individual static-network matcher p95 on the default
-request corpus. Do not substitute the local browser resource duration,
-whole-Firefox CPU percentage or an aggregate throughput mean for that
-missing engine p95.
+On 2026-10-20, the real Firefox fixture-v8, three-run-per-condition
+default-only comparison, and three-pair/300-second CPU/RAM null control
+passed **all six controlled-instrumentation readiness gates**. The
+independent correctness and default-only reports use the same source
+revisions, public asset pins and measured probe hashes. The readiness tool
+returns `ready_for_optimization=true` only for **controlled screening
+instrumentation**, not safe deployment or proof of a candidate speedup.
+Firefox's individual-call matcher timer remains too coarse (~20 µs) and
+the legacy individual-call p95 is still withheld. The new pass concerns
+the separately identified *amortized* repeated-context metric. Local
+script-resource p95 showed substantial browser/environment variation
+(including a single-profile outlier), so it remains an observability and
+behavior gate, **not** a stable production latency benchmark. Representative
+real-site request p95, addon-only CPU/RAM attribution, two unmapped selected
+list sources and richer default-list interaction coverage remain open
+limitations; future targeted optimizations still require separate
+correctness cases and paired candidate/control measurements.
 
 ## Behavioral gate before changing a filtering hot path
 
