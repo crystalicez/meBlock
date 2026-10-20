@@ -121,6 +121,27 @@ def _cohort_stats(profiles):
             len(a) >= MIN_PAIRS and lower > -NULL_TOLERANCE_PERCENT
             and upper < NULL_TOLERANCE_PERCENT
         )
+        by_order = {}
+        for label, offset in (("upstream_first", 0), ("meblock_first", 1)):
+            first, second = a[offset::2], b[offset::2]
+            if not first:
+                by_order[label] = {
+                    "pairs": 0, "null_equivalent_within_three_percent": False,
+                }
+                continue
+            stratified = paired_performance(first, second)
+            low, high = stratified["bootstrap_95_percent_interval_percent"]
+            by_order[label] = {
+                "pairs": len(first),
+                "median_paired_change_percent":
+                    stratified["median_paired_change_percent"],
+                "bootstrap_95_percent_interval_percent": [low, high],
+                "null_equivalent_within_three_percent": (
+                    len(first) >= MIN_PAIRS // 2
+                    and low > -NULL_TOLERANCE_PERCENT
+                    and high < NULL_TOLERANCE_PERCENT
+                ),
+            }
         results[cohort] = {
             "pairs": result["pairs"],
             "null_median_paired_change_percent":
@@ -129,6 +150,12 @@ def _cohort_stats(profiles):
                 result["bootstrap_95_percent_interval_percent"],
             "null_equivalent_within_three_percent":
                 result["null_equivalent_within_three_percent"],
+            "by_run_order": by_order,
+            "order_stratified_null_equivalence": (
+                len(a) >= MIN_PAIRS and len(a) % 2 == 0
+                and all(item["null_equivalent_within_three_percent"]
+                        for item in by_order.values())
+            ),
         }
     return results
 
@@ -180,9 +207,12 @@ def assess_null(null_report, dataset_path, memory_path, stock_xpi):
     equivalent = all(
         x["null_equivalent_within_three_percent"] for x in stats.values()
     )
+    order_equivalent = all(
+        x["order_stratified_null_equivalence"] for x in stats.values()
+    )
     ready = (
         same_code and pairs_balanced and clock_calibrated_and_stable
-        and equivalent
+        and equivalent and order_equivalent
     )
     return {
         "schema": "meblock-candidate-noise-preflight-v1",
@@ -192,13 +222,15 @@ def assess_null(null_report, dataset_path, memory_path, stock_xpi):
             "at_least_ten_balanced_abba_pairs": pairs_balanced,
             "calibrated_and_stable_batched_timings": clock_calibrated_and_stable,
             "paired_null_uncertainty_within_three_percent": equivalent,
+            "both_run_orders_equivalent_within_three_percent": order_equivalent,
         },
         "paired_noise_by_cohort": stats,
         "scope": (
             "Null preflight for 3% practical effects; requires >=10 balanced "
             "same-code Firefox pairs and 95% paired-bootstrap median log-ratio "
             "interval entirely inside +/-3% in official and four per-type "
-            "batched metrics. It is an empirical screen, NOT a power proof, "
+            "batched metrics, both pooled and separately for each alternating "
+            "AB/BA order. It is an empirical screen, NOT a power proof, "
             "real-site request p95 or evidence of candidate speedup. "
             "Actual candidate acceptance also requires different-source "
             "paired trials, correctness and affected-family gates."

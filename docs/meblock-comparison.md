@@ -490,8 +490,11 @@ The statistical preflight needs **at least 10 balanced independent AB/BA
 pairs** (not 10 repeated samples inside one Firefox profile). It
 calculates each pair's log-ratio and a deterministic paired bootstrap
 95% interval for the official benchmark **and** script, image, XHR and
-stylesheet batched p95. It returns `ready_for_candidate_effect_screening`
-only when every null interval fits strictly inside **±3%**.
+stylesheet batched p95. The checker tests both the pooled intervals
+and the **separate alternating run-order strata** (upstream-first and
+meBlock-first), rejecting cancellation of opposing slot biases.
+It returns `ready_for_candidate_effect_screening` only when every
+interval fits strictly inside **±3%**.
 An ordinary three-pair control cannot satisfy this, even with exactly
 matching times. Do not discard slow profiles or relax the cutoff.
 A qualifying result is an **empirical noise/bias preflight only**,

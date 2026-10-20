@@ -87,6 +87,28 @@ class NoisePreflightTests(unittest.TestCase):
         self.assertEqual(stats["official"][
             "paired_bootstrap_95_percent_interval_percent"
         ], [0.0, 0.0])
+        self.assertTrue(all(
+            row["order_stratified_null_equivalence"]
+            for row in stats.values()
+        ))
+        self.assertEqual(
+            stats["official"]["by_run_order"]["meblock_first"]["pairs"], 5,
+        )
+
+    def test_balanced_opposite_order_bias_is_rejected_for_both_orders(self):
+        profiles = make_profiles(10)
+        for index, sample in enumerate(profiles["meblock"]):
+            sample["us_per_request"] *= 1.05 if index % 2 == 0 else 0.95
+        stats = preflight._cohort_stats(profiles)
+        official = stats["official"]
+        self.assertFalse(official["order_stratified_null_equivalence"])
+        self.assertFalse(official["by_run_order"]["upstream_first"][
+            "null_equivalent_within_three_percent"
+        ])
+        self.assertFalse(official["by_run_order"]["meblock_first"][
+            "null_equivalent_within_three_percent"
+        ])
+        self.assertTrue(stats["script"]["order_stratified_null_equivalence"])
 
     def test_ten_biased_identical_build_pairs_fail_even_with_repeatability(self):
         stats = preflight._cohort_stats(make_profiles(10, official_shift=0.07))
@@ -153,6 +175,10 @@ class NoisePreflightTests(unittest.TestCase):
                         )
                         self.assertEqual(
                             payload["checks"]["at_least_ten_balanced_abba_pairs"],
+                            pairs >= 10 and pairs % 2 == 0,
+                        )
+                        self.assertEqual(
+                            payload["checks"]["both_run_orders_equivalent_within_three_percent"],
                             pairs >= 10 and pairs % 2 == 0,
                         )
 

@@ -224,8 +224,11 @@ harness fingerprints, the exact default-list corpus, full saved-profile
 comparison replay, package hashes, a byte-for-byte production XPI match
 to the separately pinned CPU/RAM memory-control package, and zero
 injected timing/filters. Every 95% paired-bootstrap *median log ratio*
-null interval—official matcher duration and the four request-type
-batched p95 cohorts—must lie strictly within **±3%**.
+null interval for the official matcher duration and the four
+request-type batched p95 cohorts must lie strictly within **±3%**.
+The checker also stratifies every metric into **upstream-first** and
+**meBlock-first** runs. Both order-specific intervals must fit the same
+bound, so opposing order biases cannot cancel in the pooled interval.
 
 The tool refuses to grant small-effect qualification on the earlier
 three-pair report. A **fresh ten-pair/twenty-profile Firefox 157 null
