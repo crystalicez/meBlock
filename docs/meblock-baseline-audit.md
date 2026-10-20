@@ -67,12 +67,16 @@ claim to reproduce external public text or any user-filter content.
 An additional eighth gate verifies the **actual XPI files**, not merely
 their reported filter counts: SHA-256 of the stock XPI must equal the
 memory-control package hash, and each instrumented XPI must match its
-reported package hash. Five unchanged network/cosmetic/scriptlet engine
-modules and the bundled core filter text must match the stock XPI byte for
-byte. `static-net-filtering.js` must match after removing **exactly** the
-known test-only buffer probe (with normalized line endings). This enforces
-the same underlying engine in the RAM/CPU and Firefox checks without
-publishing any file content.
+reported package hash. The validator compares **every packaged file** against the stock
+XPI and allows differences in exactly six known test-only paths:
+the probe dataset, background HTML, temporary background settings,
+two probe scripts, and `static-net-filtering.js`. The static
+network engine must equal the stock engine with only the known buffer
+probe appended (normalizing probe line endings). A missing, extra or
+changed file outside this allowlist fails even if the report's XPI
+hash is modified to match. This enforces identical underlying engine
+and filter assets for RAM/CPU and Firefox screening, without
+publishing file contents.
 
 The remaining gates require a 300-second three-pair same-XPI CPU/RAM null
 control, real loopback script-resource timing, and a **calibrated amortized

@@ -124,6 +124,8 @@ def package_evidence(folder, default, memory):
     source = folder / "stock.xpi"
     common = {
         "js/static-net-filtering.js": b"// public fixture engine\n",
+        "background.html": b"<body>original</body>",
+        "js/background.js": b"autoUpdate: true",
         **{name: b"// public fixture module\n" for name in ENGINE_READONLY_FILES},
     }
     probe = Path(__file__).with_name("engine_buffer_probe.js").read_text(
@@ -142,7 +144,14 @@ def package_evidence(folder, default, memory):
             for name, payload in common.items():
                 if name == "js/static-net-filtering.js":
                     payload += suffix
+                elif name in ("background.html", "js/background.js"):
+                    payload += b" test-only change"
                 archive.writestr(name, payload)
+            for added in (
+                "assets/meblock-requests.json",
+                "js/meblock-probe.js", "js/meblock-state-probe.js",
+            ):
+                archive.writestr(added, b"test-only data")
         packages[role] = {"sha256": hashlib.sha256(location.read_bytes()).hexdigest()}
         locations[role] = location
     default["packages"] = packages
@@ -282,6 +291,20 @@ class BaselineReadinessTests(unittest.TestCase):
                 )
                 for filename in ENGINE_READONLY_FILES:
                     archive.writestr(filename, b"known-public-test-content")
+                archive.writestr(
+                    "background.html",
+                    b"<body>modified</body>" if instrumented else b"<body>original</body>",
+                )
+                archive.writestr(
+                    "js/background.js",
+                    b"autoUpdate: false" if instrumented else b"autoUpdate: true",
+                )
+                if instrumented:
+                    for added in (
+                        "assets/meblock-requests.json",
+                        "js/meblock-probe.js", "js/meblock-state-probe.js",
+                    ):
+                        archive.writestr(added, b"test-only fixture data")
 
         def digest(path):
             return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -327,6 +350,13 @@ class BaselineReadinessTests(unittest.TestCase):
                         if filename == "js/redirect-engine.js"
                         else b"known-public-test-content"
                     )
+                archive.writestr("background.html", b"<body>modified</body>")
+                archive.writestr("js/background.js", b"autoUpdate: false")
+                for added in (
+                    "assets/meblock-requests.json",
+                    "js/meblock-probe.js", "js/meblock-state-probe.js",
+                ):
+                    archive.writestr(added, b"test-only fixture data")
             default["packages"]["upstream"]["sha256"] = digest(upstream)
             self.assertFalse(verify_engine_package_identity(
                 default, memory, stock, packages,

@@ -47,6 +47,16 @@ ENGINE_READONLY_FILES = (
 )
 
 
+ALLOWED_INSTRUMENTED_DIFFS = frozenset((
+    "assets/meblock-requests.json",
+    "background.html",
+    "js/background.js",
+    "js/meblock-probe.js",
+    "js/meblock-state-probe.js",
+    "js/static-net-filtering.js",
+))
+
+
 def verify_engine_package_identity(default, memory, stock_path, package_paths):
     """Prove the RAM control and instrumented Firefox runs share the same engine."""
     def file_digest(path):
@@ -78,9 +88,21 @@ def verify_engine_package_identity(default, memory, stock_path, package_paths):
                         or injected[len(source_engine):].replace(
                             b"\r\n", b"\n"
                         ) != suffix
-                        or any(candidate.read(name) != stock.read(name)
-                               for name in ENGINE_READONLY_FILES)
                     ):
+                        return False
+                    stock_files = {
+                        name for name in stock.namelist() if not name.endswith("/")
+                    }
+                    candidate_files = {
+                        name for name in candidate.namelist() if not name.endswith("/")
+                    }
+                    changes = {
+                        name for name in stock_files | candidate_files
+                        if name not in stock_files or
+                        name not in candidate_files or
+                        stock.read(name) != candidate.read(name)
+                    }
+                    if changes != ALLOWED_INSTRUMENTED_DIFFS:
                         return False
     except (OSError, ValueError, KeyError, BadZipFile):
         return False
