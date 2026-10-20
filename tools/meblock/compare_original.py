@@ -1094,6 +1094,12 @@ def read_rule_derived_manifest(dataset, payload, rows, default_lists):
         ):
             raise ValueError("Invalid default filter rule-family provenance")
     selected_digest = manifest.get("selected_list_keys_sha256")
+    provenance_fields = (
+        "selected_locally_mapped_list_count",
+        "selected_remote_only_list_count",
+        "selected_user_defined_list_count",
+        "selected_unresolved_list_count",
+    )
     if selected_digest is not None:
         if (not isinstance(selected_digest, str) or
             re.fullmatch(r"[0-9a-f]{64}", selected_digest) is None or
@@ -1101,7 +1107,14 @@ def read_rule_derived_manifest(dataset, payload, rows, default_lists):
             manifest["selected_list_count"] < 1 or
             type(manifest.get("selected_without_bundled_asset_count")) is not int or
             not 0 <= manifest["selected_without_bundled_asset_count"] <=
-                manifest["selected_list_count"]):
+                manifest["selected_list_count"] or
+            any(type(manifest.get(name)) is not int or manifest[name] < 0
+                for name in provenance_fields) or
+            manifest["selected_locally_mapped_list_count"] +
+                manifest["selected_without_bundled_asset_count"] !=
+                manifest["selected_list_count"] or
+            sum(manifest[name] for name in provenance_fields[1:]) !=
+                manifest["selected_without_bundled_asset_count"]):
             raise ValueError("Invalid selected default-list provenance")
     allowed = ("schema", *numbers, "dataset_sha256", "bundled_asset_contents_sha256")
     badfilter_fields = (
@@ -1122,8 +1135,8 @@ def read_rule_derived_manifest(dataset, payload, rows, default_lists):
     if family is not None:
         allowed += ("rule_family", *family_fields)
     allowed += (("selected_list_keys_sha256", "selected_list_count",
-                 "selected_without_bundled_asset_count") if selected_digest is not None
-                else ())
+                 "selected_without_bundled_asset_count", *provenance_fields)
+                if selected_digest is not None else ())
     output = {key: manifest[key] for key in allowed}
     if "exception_challenge" in manifest:
         expected = manifest.get("expected_explicit_allow_by_origin")

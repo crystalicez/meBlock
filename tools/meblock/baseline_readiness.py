@@ -2,9 +2,11 @@
 """Fail-closed local audit of evidence needed before optimization work."""
 
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
+from zipfile import BadZipFile, ZipFile
 
 
 REQUIRED_BEHAVIOR = (
@@ -36,7 +38,56 @@ def valid_navigation_sample(sample):
     )
 
 
-def assess(correctness, default, memory):
+ENGINE_READONLY_FILES = (
+    "js/filtering-context.js",
+    "js/redirect-engine.js",
+    "js/cosmetic-filtering.js",
+    "js/scriptlet-filtering.js",
+    "assets/ublock/filters.min.txt",
+)
+
+
+def verify_engine_package_identity(default, memory, stock_path, package_paths):
+    """Prove the RAM control and instrumented Firefox runs share the same engine."""
+    def file_digest(path):
+        if not path.is_file() or path.stat().st_size > 64 * 1024 * 1024:
+            raise ValueError("Missing or oversized disposable XPI")
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    try:
+        if file_digest(stock_path) != memory.get("source_package_sha256"):
+            return False
+        packages = default.get("packages") or {}
+        for role in ("upstream", "meblock"):
+            package = packages.get(role) or {}
+            if file_digest(package_paths[role]) != package.get("sha256"):
+                return False
+        probe = Path(__file__).with_name("engine_buffer_probe.js").read_text(
+            encoding="utf-8"
+        )
+        suffix = ("\n" + probe).encode("utf-8")
+        with ZipFile(stock_path) as stock:
+            source_engine = stock.read("js/static-net-filtering.js")
+            if not source_engine or not suffix:
+                return False
+            for role in ("upstream", "meblock"):
+                with ZipFile(package_paths[role]) as candidate:
+                    injected = candidate.read("js/static-net-filtering.js")
+                    if (
+                        not injected.startswith(source_engine)
+                        or injected[len(source_engine):].replace(
+                            b"\r\n", b"\n"
+                        ) != suffix
+                        or any(candidate.read(name) != stock.read(name)
+                               for name in ENGINE_READONLY_FILES)
+                    ):
+                        return False
+    except (OSError, ValueError, KeyError, BadZipFile):
+        return False
+    return True
+
+
+def assess(correctness, default, memory, *, engine_verified=False):
     c = correctness.get("comparison", {})
     d = default.get("comparison", {})
     m = memory
@@ -85,6 +136,30 @@ def assess(correctness, default, memory):
     identity = m.get("pinned_profile_identity", {})
     coverage = default.get("rule_derived_probe_coverage") or {}
     buffers = (d.get("engine_buffer_footprint") or {}).get("upstream") or {}
+    source_classification = (
+        type(coverage.get("selected_list_count")) is int
+        and type(coverage.get("selected_locally_mapped_list_count")) is int
+        and type(coverage.get("selected_without_bundled_asset_count")) is int
+        and all(type(coverage.get(field)) is int and coverage[field] >= 0
+                for field in ("selected_remote_only_list_count",
+                              "selected_user_defined_list_count",
+                              "selected_unresolved_list_count"))
+        and coverage["selected_locally_mapped_list_count"] >= 1
+        and coverage["selected_unresolved_list_count"] == 0
+        and coverage["selected_locally_mapped_list_count"] +
+            coverage["selected_without_bundled_asset_count"] ==
+            coverage["selected_list_count"]
+        and (coverage["selected_remote_only_list_count"] +
+             coverage["selected_user_defined_list_count"]) ==
+            coverage["selected_without_bundled_asset_count"]
+        and type(default.get("dataset_count")) is int
+        and default["dataset_count"] == coverage.get("request_count")
+        and isinstance(default.get("dataset_sha256"), str)
+        and default["dataset_sha256"] == coverage.get("dataset_sha256")
+        and type(coverage.get("simple_host_rules_in_shard")) is int
+        and coverage["simple_host_rules_in_shard"] >= 1
+        and default["dataset_count"] == 4 * coverage["simple_host_rules_in_shard"]
+    )
     source_pins = ("upstream", "meblock")
     asset_pins = ("main", "prod")
     c_refs = correctness.get("refs") or {}
@@ -111,6 +186,7 @@ def assess(correctness, default, memory):
     inputs_ready = (
         default_ready and cpu_ready and correctness_ready and same_sources
         and matching_probes
+        and source_classification
         and identity.get("network_filters") == buffers.get("compiled_network_filters")
         and identity.get("selected_list_keys_sha256") ==
         coverage.get("selected_list_keys_sha256")
@@ -165,6 +241,8 @@ def assess(correctness, default, memory):
         "unmodified_default_list_parity": default_ready,
         "paired_cpu_memory_null_control": cpu_ready,
         "pinned_runtime_inputs": inputs_ready,
+        "selected_list_source_provenance": default_ready and source_classification,
+        "same_engine_across_memory_and_browser": engine_verified,
         "browser_local_resource_p95": local_resource_ready,
         "amortized_matcher_context_p95_precision": matcher_usable,
     }
@@ -185,7 +263,13 @@ def assess(correctness, default, memory):
 def read_local_report(path):
     if not path.is_file() or path.stat().st_size > 16 * 1024 * 1024:
         raise ValueError("Missing or oversized private baseline report")
-    value = json.loads(path.read_text(encoding="utf-8"))
+
+    def reject_nonfinite(_):
+        raise ValueError("Non-finite baseline JSON number")
+
+    value = json.loads(
+        path.read_text(encoding="utf-8"), parse_constant=reject_nonfinite
+    )
     if not isinstance(value, dict):
         raise ValueError("Invalid private baseline report schema")
     return value
@@ -196,12 +280,22 @@ def main(argv=None):
     parser.add_argument("--correctness-report", type=Path, required=True)
     parser.add_argument("--default-report", type=Path, required=True)
     parser.add_argument("--memory-report", type=Path, required=True)
+    parser.add_argument("--memory-xpi", type=Path, required=True)
+    parser.add_argument("--upstream-xpi", type=Path, required=True)
+    parser.add_argument("--meblock-xpi", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
+        correctness = read_local_report(args.correctness_report)
+        default = read_local_report(args.default_report)
+        memory = read_local_report(args.memory_report)
+        verified = verify_engine_package_identity(
+            default, memory, args.memory_xpi, {
+                "upstream": args.upstream_xpi,
+                "meblock": args.meblock_xpi,
+            },
+        )
         result = assess(
-            read_local_report(args.correctness_report),
-            read_local_report(args.default_report),
-            read_local_report(args.memory_report),
+            correctness, default, memory, engine_verified=verified
         )
     except (OSError, ValueError, UnicodeError, TypeError, AttributeError):
         print(json.dumps({

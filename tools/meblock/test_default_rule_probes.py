@@ -319,6 +319,10 @@ class DefaultRuleProbeTests(unittest.TestCase):
                 self.assertEqual(coverage["simple_host_rule_unique"], 1)
                 self.assertEqual(coverage["selected_list_count"], 2)
                 self.assertEqual(coverage["selected_without_bundled_asset_count"], 1)
+                self.assertEqual(coverage["selected_locally_mapped_list_count"], 1)
+                self.assertEqual(coverage["selected_remote_only_list_count"], 1)
+                self.assertEqual(coverage["selected_user_defined_list_count"], 0)
+                self.assertEqual(coverage["selected_unresolved_list_count"], 0)
                 self.assertEqual(
                     coverage["selected_list_keys_sha256"],
                     hashlib.sha256(b"chosen\nremote").hexdigest(),
@@ -329,6 +333,32 @@ class DefaultRuleProbeTests(unittest.TestCase):
                         handle, shard_index=0, shard_count=1,
                         selected_keys=["remote"],
                     )
+
+    def test_unmapped_selected_sources_are_classified_without_capturing_urls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "selected.xpi"
+            with ZipFile(path, "w") as output:
+                output.writestr("assets/assets.dev.json", json.dumps({
+                    "local": {"contentURL": ["assets/available.txt"]},
+                    "remote": {"contentURL": [
+                        "https://public.example.invalid/list.txt",
+                        "assets/missing.txt",
+                    ]},
+                }))
+                output.writestr("assets/available.txt", "||alpha.example^")
+            with ZipFile(path) as source:
+                selected, counts = probes.mapped_selected_assets(
+                    source, ["local", "remote", "user-filters", "unknown"]
+                )
+        self.assertEqual(selected, ["assets/available.txt"])
+        self.assertEqual(counts["selected_list_count"], 4)
+        self.assertEqual(counts["selected_locally_mapped_list_count"], 1)
+        self.assertEqual(counts["selected_without_bundled_asset_count"], 3)
+        self.assertEqual(counts["selected_remote_only_list_count"], 1)
+        self.assertEqual(counts["selected_user_defined_list_count"], 1)
+        self.assertEqual(counts["selected_unresolved_list_count"], 1)
+        self.assertNotIn("example.invalid", json.dumps(counts))
+        self.assertNotIn("unknown", json.dumps(counts))
 
     def test_bundled_source_digest_matches_unmodified_built_asset_directory(self):
         with tempfile.TemporaryDirectory() as directory:

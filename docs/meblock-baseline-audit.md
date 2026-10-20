@@ -26,7 +26,7 @@ No performance change is justified solely by that estimate.
 | Stock/default-lists RAM baseline | **Three independent 300-second same-XPI negative-control pairs completed**; distinct-build candidate baseline outstanding | `memory_experiment.py --default-lists` pins the observed compiled network count (252,243), cosmetic count (44,192), ten selected default lists, their hashes and matching Firefox version across all six profiles, with no synthetic rule addition. The runner now additionally validates enabled-list counts, rejects instrumented performance XPIs, and reports observed absolute paired process noise. No claims of extension-private RAM reductions |
 | Reproducible steady-state A/B memory | **Identical-XPI control complete; independent different-build comparison not yet** | Three alternating A/B pairs of the same XPI passed engine-readiness and post-capture state validation after 300 seconds each. An earlier uncontrolled online pair and synthetic-filter-count drift are not comparable. Actual upstream-versus-optimized-build confirmation still requires its own pinned 5-minute AB/BA experiment with enough repeats for the claimed effect; this control must not be presented as that comparison |
 | Paired Firefox process-tree idle CPU | **Verified: three 300-second same-XPI A/B control pairs on Firefox 157** | Opt-in `--measure-idle-cpu` samples the disposable Firefox descendant processes during the same post-readiness window as RAM capture, reports CPU seconds and one-core-equivalent utilization, and flags process identity churn. Six isolated default-list profiles used 252,243 network and 44,192 cosmetic filters, zero injected rules, at least 300.044 seconds of sampled time, and no observed process churn. The observed median paired difference was **−0.068 one-core percentage points**, maximum absolute paired difference **0.183 points**. The paired RAM median was **−0.006 MiB**, maximum absolute deviation **0.079 MiB**. Both verdicts correctly remain **CONTROL**, not an optimization or addon-private CPU/RAM attribution. A different-build CPU screen still needs six long independent pairs and cannot establish addon-only CPU by itself |
-| Default-list-derived network request coverage | **Screened public default-list rule candidates; other families incomplete** | Ten lists selected; eight mapped to bundled public text, two did not. Of 197,055 source lines, 99,120 simple host/party/type rule candidates were recognized before checking `$badfilter`; 13 matched disabling directives in the selected bundled sources (12 blocking rules, one exception). **99,107 remain** (98,943 blocking, 164 exceptions), still not necessarily all active or individually verified in the runtime. The earlier unscreened 165-candidate no-injection exception test is a historical differential observation only. Complex exceptions, two unmapped active lists, and most blocking shards remain untested |
+| Default-list-derived network request coverage | **Selected sources classified and bounded; not all active rules covered** | Ten lists selected: **8 map to packaged public text, 1 is an external public list without packaged text, and 1 is the `user-filters` slot** (not asserted to contain rules). There are **zero unrecognized source categories**. Of 197,055 packaged source lines, 99,120 simple host/party/type candidates were recognized; 13 matched `$badfilter` disabling directives. **99,107 remain** (98,943 blocking, 164 exceptions), still not necessarily active individually. The external list, any actual user-filter text, complex modifiers, scriptlets and most rule shards are not covered by this generated request corpus. Default-list parity still exercises the running engine's compiled lists |
 | Selected default-list exception overrides under controlled blockers | **164/164 syntactically non-badfiltered exceptions showed context-level overrides in correctness-only tests** | The previous unresolved public exception was accompanied by a matching `$badfilter` directive in selected bundled assets; the generator now screens such cases across mapped files. A new 164-candidate/656-request challenge across two alternating A/B pairs (four Firefox profiles) confirmed **164/164 candidate overrides, 177/177 expected allow contexts, and 328/328 temporary blocking controls**, with identical decisions/modifiers across upstream and meBlock. The synthetic blockers are present **only in disposable correctness XPIs**, never in default-only RAM/performance builds. This is not independent attribution of each exception, complete coverage of all selected lists, or proof of optimization |
 | Independently asserted static-network precedence | **Verified for 39 fixture v8 cases in real Firefox; not a per-default-rule oracle** | A correctness-only fixture asserts fixed decisions per index for block/exception precedence, type and party combinations, positive/negative domain scopes, first-party aliases, `important`, `badfilter`, `from`, negated type, and case-sensitive regex paths. One fresh upstream/meBlock Firefox pair passed all 39 decisions on 2026-10-20. Neither engine output defines the expected vector. Default-only performance XPIs receive zero fixture rules |
 | Individual default-list rule behavior | **Not exhaustively verified** | The running browser reports compiled totals and selected-list fingerprints, but neither proves that each default-list rule has correct behavior in every URL, request-type, frame, priority, exception or modifier context. Full exhaustive context combinations are not feasible; use per-rule differential cases and targeted rule-interaction regressions for the code being optimized |
@@ -46,7 +46,13 @@ correctness report, a `--default-lists` Firefox parity report from the
 revised harness, and a same-XPI CPU/RAM paired control report. For example:
 
 ```powershell
-python tools/meblock/baseline_readiness.py --correctness-report dist/build/meblock-comparison/<correctness-run>/report.json --default-report dist/build/meblock-comparison/<default-run>/report.json --memory-report dist/build/private-memory/<paired-memory-report>.json
+python tools/meblock/baseline_readiness.py `
+  --correctness-report dist/build/meblock-comparison/<correctness-run>/report.json `
+  --default-report dist/build/meblock-comparison/<default-run>/report.json `
+  --memory-report dist/build/private-memory/<paired-memory-report>.json `
+  --memory-xpi dist/build/uBlock0.firefox.xpi `
+  --upstream-xpi dist/build/meblock-comparison/<default-run>/upstream/instrumented.xpi `
+  --meblock-xpi dist/build/meblock-comparison/<default-run>/meblock/instrumented.xpi
 ```
 
 Replace the angle-bracket placeholders with your local report names. The
@@ -54,13 +60,26 @@ tool returns **0** only when every gate passes, **1** when evidence is
 incomplete, and **2** for unreadable or invalid evidence. It validates
 independently asserted correctness, no added rules in default-list mode,
 matching upstream/fork and public asset revisions, filter-list fingerprints,
-a 300-second three-pair same-XPI CPU/RAM null control, a real browser
-loopback script-resource p95, and a **calibrated amortized matcher-context
-p95** tested on three independent Firefox sessions per condition. The p95
-must have at most 50% relative range across those sessions. Unlike a human
-checklist, the gate fails closed on
-missing evidence and prints only check names and statuses, never raw memory
-reporter data, browsing hosts, file paths, or filter text.
+and a separate **selected-list source-provenance gate**. That gate verifies
+the exact request dataset digest/row count, the packaged-versus-external/user
+source categories and zero unresolved selected sources; it does **not**
+claim to reproduce external public text or any user-filter content.
+An additional eighth gate verifies the **actual XPI files**, not merely
+their reported filter counts: SHA-256 of the stock XPI must equal the
+memory-control package hash, and each instrumented XPI must match its
+reported package hash. Five unchanged network/cosmetic/scriptlet engine
+modules and the bundled core filter text must match the stock XPI byte for
+byte. `static-net-filtering.js` must match after removing **exactly** the
+known test-only buffer probe (with normalized line endings). This enforces
+the same underlying engine in the RAM/CPU and Firefox checks without
+publishing any file content.
+
+The remaining gates require a 300-second three-pair same-XPI CPU/RAM null
+control, real loopback script-resource timing, and a **calibrated amortized
+matcher-context p95** on three independent profiles per condition. The p95
+range must be at most 50% of its median across those profiles. The gate
+fails closed on missing evidence, and outputs only pass/fail categories,
+never raw reports, browsing hosts, private paths or filter text.
 
 A pass means only that these **controlled baseline instruments** produced
 usable evidence for an experiment. It does **not** prove coverage of every
@@ -72,23 +91,39 @@ matcher p95 that Firefox quantizes too coarsely remains unavailable; the
 calibrated batched-context p95 is a **different screening metric**, not a
 replacement with the same interpretation.
 
-On 2026-10-20, the real Firefox fixture-v8, three-run-per-condition
-default-only comparison, and three-pair/300-second CPU/RAM null control
-passed **all six controlled-instrumentation readiness gates**. The
-independent correctness and default-only reports use the same source
-revisions, public asset pins and measured probe hashes. The readiness tool
-returns `ready_for_optimization=true` only for **controlled screening
-instrumentation**, not safe deployment or proof of a candidate speedup.
-Firefox's individual-call matcher timer remains too coarse (~20 µs) and
-the legacy individual-call p95 is still withheld. The new pass concerns
-the separately identified *amortized* repeated-context metric. Local
-script-resource p95 showed substantial browser/environment variation
-(including a single-profile outlier), so it remains an observability and
-behavior gate, **not** a stable production latency benchmark. Representative
-real-site request p95, addon-only CPU/RAM attribution, two unmapped selected
-list sources and richer default-list interaction coverage remain open
-limitations; future targeted optimizations still require separate
-correctness cases and paired candidate/control measurements.
+On 2026-10-20, the baseline evolved from the historical six-gate,
+1,460-request screen to an **eight-gate** proof using the regenerated
+**1,552-request** default-list shard (388 public candidate rules).
+The source audit confirms eight packaged public lists, one external
+public list and the standard `user-filters` slot, with **zero unresolved
+list identities**. Upstream and meBlock agreed on all 1,552 decisions,
+modifier masks and browser controls. The first new three-pair run correctly
+**failed** the amortized matcher p95 stability check: one upstream profile
+had an outlier above the predeclared 50% spread threshold. It remains
+recorded as a rejected control, not silently discarded.
+
+A complete, independently repeated three-pair run **passed** with
+per-context amortized p95 medians **27.1484 µs upstream and
+27.1094 µs meBlock**, with cross-profile spreads **2.45% and 2.31%**.
+The same-source fixture-v8 correctness control passed, and the stock
+CPU/RAM XPI, actual instrumented XPIs and unchanged filtering modules
+passed full package fingerprint and probe-difference validation.
+The local audit consequently returned **8/8 READY for controlled
+instrumentation screening only**. This is not a measured optimization,
+and the earlier failed run documents the possibility of substantial
+real-world timing interference. Repeat candidate/control experiments
+rather than choosing an unusually favorable run.
+
+Firefox's individual-call matcher timer remains too coarse (~20 µs); the
+legacy individual-call p95 is still withheld. Batched-context p95 is
+only a *different* controlled screening metric. Local script-resource
+p95 has also shown environmental outliers and is **not** stable production
+website latency. Real-site request tails, addon-private CPU/RAM
+attribution, the public external list's unavailable packaged text,
+user-filter text (if any), and advanced modifier/scriptlet context
+coverage remain documented limits. A future targeted optimization still
+requires affected-rule correctness cases and independent candidate-vs-control
+A/B runs; do not optimize while an essential readiness gate is failing.
 
 ## Behavioral gate before changing a filtering hot path
 

@@ -71,6 +71,9 @@ def mapped_selected_assets(archive, selected_keys):
     available = set(archive.namelist())
     paths = set()
     unmapped = 0
+    remote_only = 0
+    user_defined = 0
+    unresolved = 0
     for key in selected_keys:
         entry = registry.get(key, {})
         urls = entry.get("contentURL", []) if isinstance(entry, dict) else []
@@ -86,6 +89,16 @@ def mapped_selected_assets(archive, selected_keys):
             paths.add(matching[0])
         else:
             unmapped += 1
+            if key == "user-filters" and key not in registry:
+                user_defined += 1
+            elif (
+                isinstance(entry, dict)
+                and any(isinstance(url, str) and url.startswith("https://")
+                        for url in urls)
+            ):
+                remote_only += 1
+            else:
+                unresolved += 1
     if not paths:
         raise ValueError("No selected filter lists map to packaged public assets")
     return sorted(paths), {
@@ -93,7 +106,11 @@ def mapped_selected_assets(archive, selected_keys):
             "\n".join(sorted(selected_keys)).encode("utf-8")
         ).hexdigest(),
         "selected_list_count": len(selected_keys),
+        "selected_locally_mapped_list_count": len(selected_keys) - unmapped,
         "selected_without_bundled_asset_count": unmapped,
+        "selected_remote_only_list_count": remote_only,
+        "selected_user_defined_list_count": user_defined,
+        "selected_unresolved_list_count": unresolved,
     }
 
 

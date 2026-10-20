@@ -772,7 +772,11 @@ class CompareTests(unittest.TestCase):
                 **family_manifest,
                 "selected_list_keys_sha256": "b" * 64,
                 "selected_list_count": 1,
+                "selected_locally_mapped_list_count": 1,
                 "selected_without_bundled_asset_count": 0,
+                "selected_remote_only_list_count": 0,
+                "selected_user_defined_list_count": 0,
+                "selected_unresolved_list_count": 0,
                 "exception_challenge": True,
                 "expected_explicit_allow_by_origin": [False, True],
             }
@@ -780,6 +784,17 @@ class CompareTests(unittest.TestCase):
             checked = runner.read_rule_derived_manifest(dataset, payload, rows, True)
             self.assertEqual(checked["_expected_allow_by_origin"], [False, True])
             self.assertTrue(checked["exception_challenge"])
+            invalid_sources = {
+                **challenge, "selected_remote_only_list_count": 1,
+            }
+            sidecar.write_text(json.dumps(invalid_sources), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "selected default-list provenance"):
+                runner.read_rule_derived_manifest(dataset, payload, rows, True)
+            missing_category = dict(challenge)
+            missing_category.pop("selected_remote_only_list_count")
+            sidecar.write_text(json.dumps(missing_category), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "selected default-list provenance"):
+                runner.read_rule_derived_manifest(dataset, payload, rows, True)
             challenge["expected_explicit_allow_by_origin"] = [False, 1]
             sidecar.write_text(json.dumps(challenge), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "exception-challenge oracle"):

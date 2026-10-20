@@ -254,11 +254,22 @@ Replace `SESSION` with the local ignored session directory. The generator
 uses the XPI's public list registry to map the browser's selected list keys
 to packaged public asset files. It records only a **SHA-256 of the selected
 keys** and aggregate counts, not the raw list keys or any browser URLs.
-The comparator checks that hash against every live Firefox run. This prevents
-accidentally treating disabled bundled lists as selected. Currently the
-default Firefox profile selects 10 lists, of which **eight map to bundled
-public assets**; two do not have a packaged public text source in this
-XPI. Their rules are **outside this generator's coverage**, even if active.
+The comparator checks that hash against every live Firefox run and also
+compares the aggregate selected bundled-asset content fingerprint against
+the actual disposable builds of both upstream and meBlock **before**
+running Firefox. This prevents silently using a request corpus from a
+different public asset snapshot or treating disabled lists as selected.
+The source snapshot test confirmed the same digest across the local stock
+XPI and both instrumented Firefox XPIs. Currently the
+default Firefox profile selects 10 lists: **eight map to bundled
+public assets, one public external list has no packaged text, and one is the
+`user-filters` slot**. The generator now reports these as distinct aggregate
+source categories, and records an additional count for unknown/unresolved
+sources (which must be zero at baseline-readiness acceptance). The external
+list and any actual user-filter text are **outside this generator's
+coverage**; the default-only runtime comparison still uses the complete
+engine-loaded default list selection, without synthetic rules. No private
+filter text, list URLs or raw names are included in public reports.
 
 Deterministic, disjoint shards are indexed from zero. All rule candidates
 from the chosen bundled files are assigned exactly once across the chosen shard
