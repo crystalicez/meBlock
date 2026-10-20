@@ -20,6 +20,8 @@ from browser_fixtures import (
     DYNAMIC_FIREWALL_EXPECTED, STATE_PERSISTENCE_KEY,
     EXTRA_COSMETIC_COUNT, EXTRA_VISIBLE_COUNT, EXTRA_SCRIPTLET_COUNT,
     FIXTURE_VERSION, PAGE,
+    PRECEDENCE_RULES, PRECEDENCE_CASES, PRECEDENCE_EXPECTED,
+    precedence_case_request,
 )
 
 
@@ -92,12 +94,74 @@ def buffer_sample(size=1024):
 
 
 class CompareTests(unittest.TestCase):
+    def test_fixture_precedence_is_required_for_comparator_when_reported(self):
+        expected = list(PRECEDENCE_EXPECTED)
+        data = {
+            "upstream": [make_run()],
+            "meblock": [make_run()],
+        }
+        for role in data:
+            data[role][0]["fixture_precedence"] = list(expected)
+        accepted = runner.compare(data, DATASET, identical_build=True)
+        self.assertTrue(accepted["correctness"]["fixture_precedence_match"])
+        self.assertIn("CONTROL", accepted["verdict"])
+        data["meblock"][0]["fixture_precedence"][5] = 1
+        rejected = runner.compare(data, DATASET, identical_build=True)
+        self.assertFalse(rejected["correctness"]["fixture_precedence_match"])
+        self.assertEqual(rejected["verdict"], "FAIL: behavioral regression")
+        data["meblock"][0]["fixture_precedence"] = []
+        missing = runner.compare(data, DATASET)
+        self.assertFalse(missing["correctness"]["fixture_precedence_match"])
+        self.assertEqual(missing["verdict"], "FAIL: behavioral regression")
+
+    def test_fixture_precedence_oracle_is_fixed_per_index(self):
+        self.assertEqual(len(PRECEDENCE_CASES), 18)
+        self.assertEqual(
+            PRECEDENCE_EXPECTED,
+            (1, 0, 2, 1, 0, 2, 1, 1, 2, 1, 0, 1, 0, 1, 0, 0, 1, 0),
+        )
+        self.assertEqual(
+            precedence_case_request(PRECEDENCE_CASES[2]),
+            {
+                "frameUrl": "https://reader.test/",
+                "url": "https://mb-fixture-override.example.invalid/test.js",
+                "cpt": "script",
+            },
+        )
+        self.assertEqual(runner.precedence_mismatches(
+            list(PRECEDENCE_EXPECTED), default_lists=False,
+        ), [])
+        self.assertEqual(runner.precedence_mismatches(
+            [], default_lists=True,
+        ), [])
+        self.assertEqual(len(runner.precedence_mismatches(
+            [], default_lists=False,
+        )), 1)
+        self.assertEqual(len(runner.precedence_mismatches(
+            list(PRECEDENCE_EXPECTED), default_lists=True,
+        )), 1)
+        for i in range(len(PRECEDENCE_EXPECTED)):
+            mutated = list(PRECEDENCE_EXPECTED)
+            mutated[i] = (mutated[i] + 1) % 3
+            problems = runner.precedence_mismatches(mutated, default_lists=False)
+            self.assertEqual(problems[0]["index"], i)
+            self.assertEqual(problems[0]["name"], PRECEDENCE_CASES[i][0])
+            self.assertEqual(len(problems), 1)
+        corrupted = list(PRECEDENCE_EXPECTED)
+        corrupted[0] = True
+        self.assertEqual(len(runner.precedence_mismatches(
+            corrupted, default_lists=False,
+        )), 1)
+        self.assertNotIn("https://", str(runner.precedence_mismatches(
+            corrupted, default_lists=False,
+        )))
+
     def test_page_side_fixture_is_deterministic_and_has_three_selector_shapes(self):
-        self.assertEqual(FIXTURE_VERSION, 5)
+        self.assertEqual(FIXTURE_VERSION, 6)
         self.assertEqual(EXTRA_COSMETIC_COUNT, 96)
         self.assertEqual(EXTRA_VISIBLE_COUNT, 32)
         self.assertEqual(EXTRA_SCRIPTLET_COUNT, 12)
-        self.assertEqual(len(RULES), 8 + 96 + 12)
+        self.assertEqual(len(RULES), 8 + 96 + 12 + 14)
         self.assertIn("127.0.0.1##.mb-extra-class-000", RULES)
         self.assertIn("127.0.0.1###mb-extra-001", RULES)
         self.assertIn('127.0.0.1##[data-mb-extra="002"]', RULES)
@@ -631,7 +695,7 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(WITH_ADDON["blocked_image"], False)
         self.assertEqual(WITH_ADDON["blocked_frame"], False)
         self.assertTrue(WITH_ADDON["cosmetic_hidden"])
-        self.assertEqual(len(RULES), 8 + EXTRA_COSMETIC_COUNT + EXTRA_SCRIPTLET_COUNT)
+        self.assertEqual(len(RULES), 22 + EXTRA_COSMETIC_COUNT + EXTRA_SCRIPTLET_COUNT)
         self.assertTrue(PARAMETERS_WITHOUT_ADDON["tracking_parameter_present"])
         self.assertFalse(PARAMETERS_WITH_ADDON["tracking_parameter_present"])
         self.assertFalse(WITH_ADDON["xhr_blocked"])

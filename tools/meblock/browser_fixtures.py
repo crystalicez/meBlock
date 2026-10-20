@@ -6,7 +6,7 @@ filter rules and expected observations form one versioned behavior contract.
 
 from base64 import b64decode
 
-FIXTURE_VERSION = 5
+FIXTURE_VERSION = 6
 
 DYNAMIC_FIREWALL_EXPECTED = {
     "block": 1,
@@ -28,6 +28,72 @@ RULES = (
     "||127.0.0.1^*fixture-params$removeparam=utm_source",
     "127.0.0.1##.meblock-probe-hide",
 )
+
+
+# Independently specified static-network precedence oracle, used ONLY in
+# disposable correctness XPIs. None of these filters is in default-only
+# RAM/speed acceptance builds.
+PRECEDENCE_RULES = (
+    "||mb-fixture-block.example.invalid^",
+    "||mb-fixture-override.example.invalid^",
+    "@@||mb-fixture-override.example.invalid^$script",
+    "||mb-fixture-exception3p.example.invalid^",
+    "@@||mb-fixture-exception3p.example.invalid^$third-party",
+    "||mb-fixture-important.example.invalid^$important",
+    "@@||mb-fixture-important.example.invalid^",
+    "||mb-fixture-domain.example.invalid^$script",
+    "@@||mb-fixture-domain.example.invalid^$script,domain=mb-fixture-reader.example.invalid",
+    "||mb-fixture-type.example.invalid^$script",
+    "||mb-fixture-party.example.invalid^$third-party",
+    "||mb-fixture-disabled.example.invalid^$script",
+    "||mb-fixture-disabled.example.invalid^$script,badfilter",
+    "||mb-fixture-not3p.example.invalid^$~third-party",
+)
+
+# (name, request URL, document URL, request type, expected matchRequest decision)
+# 0 = no match, 1 = block, 2 = explicit allow. Each expectation is an
+# independent behavioral oracle, not copied from either browser run.
+PRECEDENCE_CASES = (
+    ("block", "mb-fixture-block", "reader", "script", 1),
+    ("block-near-miss", "near-mb-fixture-block", "reader", "script", 0),
+    ("type-specific-exception", "mb-fixture-override", "reader", "script", 2),
+    ("type-not-excepted", "mb-fixture-override", "reader", "image", 1),
+    ("exception-near-miss", "near-mb-fixture-override", "reader", "script", 0),
+    ("third-party-exception", "mb-fixture-exception3p", "reader", "script", 2),
+    ("same-host-not-excepted", "mb-fixture-exception3p", "self", "script", 1),
+    ("important-block-over-exception", "mb-fixture-important", "reader", "script", 1),
+    ("document-scoped-exception", "mb-fixture-domain", "mb-fixture-reader", "script", 2),
+    ("other-document-not-excepted", "mb-fixture-domain", "reader", "script", 1),
+    ("different-request-type", "mb-fixture-domain", "reader", "image", 0),
+    ("script-type-block", "mb-fixture-type", "reader", "script", 1),
+    ("non-script-passes", "mb-fixture-type", "reader", "image", 0),
+    ("third-party-block", "mb-fixture-party", "reader", "script", 1),
+    ("same-host-party-passes", "mb-fixture-party", "self", "script", 0),
+    ("disabled-by-badfilter", "mb-fixture-disabled", "reader", "script", 0),
+    ("first-party-only-block", "mb-fixture-not3p", "self", "script", 1),
+    ("third-party-not-blocked", "mb-fixture-not3p", "reader", "script", 0),
+)
+
+
+def precedence_case_request(case):
+    name, host, origin, kind, expected = case
+    target_host = host + ".example.invalid"
+    origin_host = (
+        target_host if origin == "self"
+        else "reader.test" if origin == "reader"
+        else origin + ".example.invalid"
+    )
+    return {
+        "frameUrl": "https://" + origin_host + "/",
+        "url": "https://" + target_host + "/test." +
+            ("png" if kind == "image" else "js"),
+        "cpt": kind,
+    }
+
+
+PRECEDENCE_EXPECTED = tuple(case[4] for case in PRECEDENCE_CASES)
+
+RULES += PRECEDENCE_RULES
 
 EXTRA_COSMETIC_COUNT = 96
 EXTRA_VISIBLE_COUNT = 32

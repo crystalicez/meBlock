@@ -32,6 +32,7 @@ from browser_fixtures import (
     FIXTURE_VERSION, OBSERVATION_SCRIPT, ROUTES, RULES, WITH_ADDON, WITHOUT_ADDON,
     PARAMETERS_WITH_ADDON, PARAMETERS_WITHOUT_ADDON,
     DYNAMIC_FIREWALL_EXPECTED, STATE_PERSISTENCE_KEY,
+    PRECEDENCE_CASES, PRECEDENCE_EXPECTED, precedence_case_request,
 )
 from filtering_benchmark import parse_report_text, valid_rows
 
@@ -117,7 +118,13 @@ def probe_package(build, destination, role, endpoint, token, dataset_bytes,
     original_engine = network_engine.read_text(encoding="utf-8")
     if "meblockEngineBufferFootprint" in original_engine:
         raise RuntimeError("Test-only engine buffer probe already injected")
-    config = {"role": role, "endpoint": endpoint, "token": token}
+    config = {
+        "role": role, "endpoint": endpoint, "token": token,
+        "precedence_cases": (
+            [precedence_case_request(case) for case in PRECEDENCE_CASES]
+            if include_fixture_rules else []
+        ),
+    }
     (build / "assets" / "meblock-requests.json").write_bytes(dataset_bytes)
     background = build / "js" / "background.js"
     settings_source = background.read_text(encoding="utf-8")
@@ -389,6 +396,18 @@ def test_without_addon(endpoint, driver_binary, firefox_binary):
         browser.quit()
 
 
+def precedence_mismatches(observed, *, default_lists):
+    expected = () if default_lists else PRECEDENCE_EXPECTED
+    if not isinstance(observed, list) or len(observed) != len(expected):
+        return [{"error": "missing or incomplete precedence vector"}]
+    return [
+        {"index": index, "name": PRECEDENCE_CASES[index][0],
+         "expected": wanted, "actual": value}
+        for index, (wanted, value) in enumerate(zip(expected, observed))
+        if type(value) is not int or value != wanted
+    ]
+
+
 def firefox_run(xpi, role, state, driver_binary, firefox_binary,
                 timeout, idle_sample, endpoint, expected_addon_id,
                 *, default_lists=False):
@@ -418,6 +437,12 @@ def firefox_run(xpi, role, state, driver_binary, firefox_binary,
             raise RuntimeError(result.get("message", "Firefox benchmark failed") + "\n" + result.get("stack", ""))
         if result.get("engine_ready") is not True:
             raise RuntimeError("Benchmark ran without filtering readiness")
+        failures = precedence_mismatches(
+            result.get("fixture_precedence"), default_lists=default_lists
+        )
+        if failures:
+            raise RuntimeError(f"Firefox static precedence regression: {failures[:18]}")
+        result["fixture_precedence_verified"] = True
         result["addon_id_verified"] = True
         result["firefox_version"] = browser.capabilities.get("browserVersion")
         result.pop("token", None)
@@ -688,6 +713,17 @@ def compare(data, dataset, identical_build=False, *, default_lists=False):
     behavior["local_block_positive_control"] = (
         None if default_lists else behavior["browser_page_match"]
     )
+    vectors = [
+        row.get("fixture_precedence")
+        for role in ROLES for row in data[role]
+    ]
+    behavior["fixture_precedence_match"] = (
+        None if all(value is None for value in vectors)
+        else not any(
+            precedence_mismatches(value, default_lists=default_lists)
+            for value in vectors
+        )
+    )
     url_parameters = [
         row.get("browser_parameters") for role in ROLES for row in data[role]
     ]
@@ -791,6 +827,7 @@ def compare(data, dataset, identical_build=False, *, default_lists=False):
     matching = (behavior["per_request_match"] and behavior["modifier_per_request_match"]
                 and behavior["aggregate_modifier_counts_match"]
                 and behavior["auxiliary_benchmarks_match"] and behavior["browser_page_match"]
+                and behavior["fixture_precedence_match"] is not False
                 and behavior["url_modifier_match"]
                 and behavior["dynamic_firewall_match"]
                 and behavior["settings_reload_and_restore_match"]

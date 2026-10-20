@@ -45,6 +45,40 @@ python tools/meblock/compare_original.py --runs 5 --idle-sample 5
 
 Those process-wide readings are secondary diagnostics, not reliable per-extension allocation or CPU metrics.
 
+## Independent exception and precedence oracle (test-only fixture v6)
+
+The non-default correctness comparison injects fourteen **synthetic,
+isolated** static-network rules in two disposable XPIs, and checks
+**18 fixed per-index expected decisions** (0 no match, 1 block, 2
+explicit allow). It covers plain blocks and near misses, type-specific
+exceptions, third-party exceptions versus same-host requests,
+`important` block precedence, `domain=` scoping, request-type
+restrictions, `badfilter` deactivation and negated third-party options.
+
+Unlike agreement-only upstream/fork parity, these expectations are
+**independent of both engine outputs**. A missing vector, extra entry,
+non-integer decision or incorrect result at any index causes the Firefox
+run to fail. Fixture v6 also retains the loopback browser-page tests
+and their per-index cosmetic/scriptlet assertions.
+
+The third-party test document is on a **different registrable site**
+from the target. An initial test mistakenly placed both document and
+target under the same registrable suffix, correctly failed three
+third-party expectations, and was corrected without changing the
+expected decisions.
+
+Run the existing correctness harness **without** `--default-lists`:
+
+```powershell
+python tools/meblock/compare_original.py --dataset dist/build/meblock-requests-coverage.json --runs 2
+```
+
+These fourteen rules and 18 vectors are **never injected or executed**
+in `--default-lists` mode; that mode still checks only the real enabled
+subscription lists. Fixture precedence tests do not prove that all
+default-list exceptions behave correctly or cover every rule priority
+interaction.
+
 ## Request probes derived from bundled default-list rules
 
 The original smoke corpus targets a few repeated, known network URLs.

@@ -162,6 +162,14 @@ async function main() {
         }
         modifierMasks.push(mask);
     }
+    // Correctness-only oracle on disposable fixture filters. Not used in
+    // default-list RAM/speed comparison builds or their request dataset.
+    const fixturePrecedence = [];
+    for (const ruleCase of config.precedence_cases) {
+        prepareContext(fctxt, ruleCase);
+        sfne.redirectURL = undefined;
+        fixturePrecedence.push(sfne.matchRequest(fctxt));
+    }
     const elapsed = elapsedPerPass.reduce((total, ms) => total + ms, 0);
     await report({
         status: 'ok',
@@ -175,6 +183,7 @@ async function main() {
         request_latency: latency,
         outcomes,
         modifier_masks: modifierMasks,
+        fixture_precedence: fixturePrecedence,
         decisions: { blocked, allowed, passed: data.length - blocked - allowed },
         official,
         extra,
