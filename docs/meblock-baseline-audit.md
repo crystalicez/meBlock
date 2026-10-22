@@ -1,5 +1,7 @@
 # meBlock baseline audit: prerequisites before memory optimization
 
+> **Performance-tool selection (2026-10-22):** uBO's built-in SFNE benchmark is the selected **primary** network-speed test; see [the one canonical speed workflow](meblock-filtering-benchmark.md). `compare_original.py` remains the Firefox correctness/provenance gate. Historic five-pass matcher, single-call wall-time p95 and amortized context-batch p95 are **archived diagnostics**, not the main speed verdict. They are retained, not deleted. The official benchmark's precision still needs longer-workload independent validation.
+
 **Status: PARTIALLY VERIFIED, NOT YET AN OPTIMIZATION ACCEPTANCE BASELINE.**
 
 This audit separates a working test instrument from a repeatable performance
@@ -214,8 +216,7 @@ reports and requires new isolated Firefox checks.
 
 The general **11/11 baseline** and test-only large-delay sensitivity check
 do not validate small speedups. From a real byte-identical 3-pair Firefox
-control, the official benchmark reported a **20.52% median paired role
-difference**, even though compiled filtering engine bytes were equal.
+control, the **custom five-pass matcher metric** (`us_per_request`) reported a **20.52% median paired role difference**, even though compiled filtering engine bytes were equal. This is not the official uBO SFNE benchmark timing.
 To prevent using that variability as evidence of a 3% optimization,
 `tools/meblock/candidate_noise_preflight.py` now provides a separate,
 fail-closed **pre-candidate noise screen** using at least **ten**
@@ -224,8 +225,9 @@ harness fingerprints, the exact default-list corpus, full saved-profile
 comparison replay, package hashes, a byte-for-byte production XPI match
 to the separately pinned CPU/RAM memory-control package, and zero
 injected timing/filters. Every 95% paired-bootstrap *median log ratio*
-null interval for the official matcher duration and the four
-request-type batched p95 cohorts must lie strictly within **±3%**.
+null interval for the **custom five-pass matcher** duration and the four
+request-type batched p95 cohorts must lie strictly within **±3%**. These legacy
+cohorts no longer determine acceptance of the primary upstream benchmark.
 The checker also stratifies every metric into **upstream-first** and
 **meBlock-first** runs. Both order-specific intervals must fit the same
 bound, so opposing order biases cannot cancel in the pooled interval.
@@ -241,7 +243,7 @@ stability and every paired null equivalence test **failed**.
 
 | Same-engine null metric | Median paired difference | Bootstrap 95% interval |
 | --- | ---: | ---: |
-| Official benchmark | −16.65% | −45.56% to +26.69% |
+| Custom five-pass matcher | −16.65% | −45.56% to +26.69% |
 | Script amortized p95 | +1.00% | −4.63% to +4.92% |
 | Image amortized p95 | +2.61% | −12.50% to +27.49% |
 | XHR amortized p95 | +0.39% | −7.93% to +19.48% |
