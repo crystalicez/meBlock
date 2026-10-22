@@ -2,6 +2,21 @@
 
 This workflow uses uBlock Origin's built-in `benchmarkStaticNetFiltering()` in `src/js/benchmarks.js`. It complements the earlier Firefox process RSS/CPU experiment. It does not alter filtering logic.
 
+## Primary baseline suite: upstream first
+
+**Active primary speed test:** uBlock Origin's own `benchmarkStaticNetFiltering()`, with a pinned, public request dataset and only the **default enabled filter lists**. Keep the existing `filtering_benchmark.py` parser/comparator for captured upstream text output. Use the **same benchmark** for both builds; do not replace its timing with meBlock's custom matcher loops. Warm up before recording runs, alternate A/B order, validate the input hashes and filtering counts, and report observed range alongside median. A 100,000-request corpus is an initial suggestion, not a measured precision guarantee; increase work if whole-millisecond reporting or environmental noise dominates. Synthetic request traffic is a smoke test, never representative user performance.
+
+**Existing correctness gate, not an additional speed benchmark:** run `compare_original.py --default-lists` against the same pinned build/list selection when evaluating a candidate. It compares full per-request decision/modifier vectors, state and browser fixtures. Its `official` field contains the real uBO benchmark output, but its `us_per_request` field is a *separate* meBlock-only five-pass matcher+context loop, **not** uBO's benchmark duration. The old null preflight calls that custom field `official` internally; that historic label does not make it uBO's official result.
+
+**Archived/diagnostic, excluded from the primary speed verdict:** `browser_probe.js`'s per-call p95 with timer overhead, 512-repetition context-batched p95, five-pass `us_per_request`, synthetic-delay sensitivity controls, and `candidate_noise_preflight.py`'s 3% null screen. Retain their code, tests and failed evidence for forensic/research use; do not delete them or present their results as speedup acceptance. The real same-code 10-pair null screen previously failed its ±3% target; none of these instruments establishes a 3% improvement.
+
+**Separate on demand:** Firefox Profiler for CPU hot paths, existing Firefox memory experiment and engine-buffer counters for their separately scoped RAM questions. Do not mix profiler or memory capture timing into the network speed screen. Passing the quick screen alone never licenses an optimization: confirm correctness and independently validate a meaningful candidate A/B difference before claiming gains.
+
+### Direct Firefox check of the existing upstream tool (2026-10-22)
+
+A fresh isolated, default-list-only one-pair comparison executed the built-in uBO benchmark over 1,552 requests in each Firefox profile. The upstream benchmark printed **79 ms upstream vs 49 ms meBlock** (whole-millisecond resolution); both blocked **759** requests. The separate custom timing printed **10.562 vs 15.588 microseconds/request**, demonstrating that these two instruments cannot be treated as interchangeable. This is **one unqualified exploratory pair**, not proof that either same-engine build is faster or slower, and 1,552 requests is not approved as the primary precision corpus. Keep the saved raw evidence local and ignored.
+
+
 ## What upstream measures
 
 The function loads an array of objects containing `frameUrl`, `url`, and `cpt`. It processes the requests with the loaded static filtering engine, times that loop with `performance.now()`, and reports the total requests, elapsed milliseconds, average time per request, and aggregate blocking/modifier counts.
