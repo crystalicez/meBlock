@@ -14,7 +14,7 @@ This workflow uses uBlock Origin's built-in `benchmarkStaticNetFiltering()` in `
 
 ### Direct Firefox check of the existing upstream tool (2026-10-22)
 
-A fresh isolated, default-list-only one-pair comparison executed the built-in uBO benchmark over 1,552 requests in each Firefox profile. The upstream benchmark printed **79 ms upstream vs 49 ms meBlock** (whole-millisecond resolution); both blocked **759** requests. The separate custom timing printed **10.562 vs 15.588 microseconds/request**, demonstrating that these two instruments cannot be treated as interchangeable. This is **one unqualified exploratory pair**, not proof that either same-engine build is faster or slower, and 1,552 requests is not approved as the primary precision corpus. Keep the saved raw evidence local and ignored.
+Two fresh **independent upstream-first Firefox pairs** completed (four disposable profiles), each running the real uBO benchmark on 1,552 default-list requests. Built-in durations were **79/49 ms** (upstream/meBlock) in pair 1 and **55/38 ms** in pair 2, rounded to whole milliseconds. Every arm blocked **759** requests. The separate custom matcher-only timing produced **10.562/15.588** and **19.222/8.466 microseconds/request**, even reversing its apparent winner between pairs. The custom timer is therefore **unfit as the primary speed verdict**. The built-in result is directly attributable to uBO's own implementation, but is **not yet precision-qualified** on this very short corpus; both pairs ran in the same upstream-first order and are not an AB/BA candidate study. These are no speedup/regression claims. Keep the saved raw evidence local and ignored.
 
 
 ## What upstream measures
