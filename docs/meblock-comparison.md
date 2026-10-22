@@ -1,5 +1,7 @@
 # Comparing original uBlock Origin and meBlock
 
+> **Secondary validation suite, not the primary speed benchmark.** Use [uBO's SFNE benchmark](meblock-filtering-benchmark.md) for the single primary network-speed screen. This full Firefox suite remains active for per-request correctness, modifiers, settings, browser fixtures and pinned input provenance. Its extra timing diagnostics are preserved for research but **excluded from the primary speed verdict**; do not run all of them for each fast iteration.
+
 This test suite compares **two real Firefox builds**, using pinned Git trees:
 
 - Original: `upstream/master` (or an explicit upstream commit)
@@ -365,7 +367,7 @@ For retained RAM use **uninstrumented** XPIs with
 | Git and assets | Exact commit hashes, asset revisions, dataset SHA-256, harness file hashes, fixture version and selected filter-list keys | Detect mismatched inputs across both builds and preserve the exact test implementation |
 | Build regression | Both Firefox builds must succeed; resulting file hashes are compared | All modified bundled files are visible |
 | Runtime | Separate Firefox profiles, installed addon ID and filter engine readiness | Code actually ran in Firefox |
-| Original benchmark | Calls `benchmarkStaticNetFiltering` in both builds | Verifies upstream's engine benchmark completes |
+| Built-in upstream benchmark | Calls `benchmarkStaticNetFiltering` in both builds | Verifies execution and filtering/modifier counts; its text output is not the separately timed `us_per_request` field |
 | Behavior regression | Full per-request decision vector and six modifier bitmasks | Compares block/allow outcomes and each redirect, removeparam, URL skip, CSP, permissions and replace decision by request index; also checks aggregate counts against upstream |
 | Browser behavior fixture | Independent Firefox-without-addon negative control, then both test builds | Asserts actual script, image, iframe, XHR, noop redirect, CSS hiding, scriptlet injection and query-parameter removal behavior |
 | Dynamic firewall state | Set block, allow, noop and destination override on an isolated source hostname, then roll back | Checks actual uBO session firewall API and asserts no leftover rule |
@@ -461,9 +463,11 @@ comparisons must preserve the same workload and method.
 
 The **11-gate, three-pair baseline readiness** certifies the controlled
 instrumentation and behavioral fixtures, **not** enough precision to claim
-a small (for example 3%) candidate speedup. The same-code official
-Firefox benchmark has sometimes shown large paired differences even
-when all synthetic request decisions agree.
+a small (for example 3%) candidate speedup. The same-code **custom five-pass matcher** metric (field
+`us_per_request`, historically labelled `official` by the null-preflight
+schema) has sometimes shown large paired differences even when all
+synthetic request decisions agree. It is **not** uBO's built-in SFNE
+benchmark duration.
 
 To test whether the *current host/runtime* has a sufficiently small
 measured null bias for subsequent 3% candidate screening, first collect
@@ -489,7 +493,7 @@ or filter text.
 The statistical preflight needs **at least 10 balanced independent AB/BA
 pairs** (not 10 repeated samples inside one Firefox profile). It
 calculates each pair's log-ratio and a deterministic paired bootstrap
-95% interval for the official benchmark **and** script, image, XHR and
+95% interval for the custom matcher **and** script, image, XHR and
 stylesheet batched p95. The checker tests both the pooled intervals
 and the **separate alternating run-order strata** (upstream-first and
 meBlock-first), rejecting cancellation of opposing slot biases.
@@ -505,8 +509,8 @@ trials, behavior and source impact coverage, multiple-condition regression
 checks and separate CPU/RAM evidence.
 
 **Measured outcome (2026-10-20):** The first full 10-pair same-engine
-null comparison was rejected by this new preflight. Its official
-benchmark median paired role difference was **−16.65%**, with
+null comparison was rejected by this new preflight. Its custom matcher
+median paired role difference was **−16.65%**, with
 bootstrap interval **−45.56% to +26.69%**; even the script batched
 cohort had an interval of **−4.63% to +4.92%**, outside the strict
 ±3% target. The other request categories also failed their
