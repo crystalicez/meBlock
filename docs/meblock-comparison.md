@@ -1,6 +1,6 @@
 # Comparing original uBlock Origin and meBlock
 
-> **Secondary validation suite, not the primary speed benchmark.** Use [uBO's SFNE benchmark](meblock-filtering-benchmark.md) for the single primary network-speed screen. This full Firefox suite remains active for per-request correctness, modifiers, settings, browser fixtures and pinned input provenance. Its extra timing diagnostics are preserved for research but **excluded from the primary speed verdict**; do not run all of them for each fast iteration.
+> **Secondary validation suite, not the primary speed benchmark.** Run `python tools/meblock/sfne_quick.py --dataset dist/build/default-rule-probes-sfne-primary.json --runs 3` for the single [upstream SFNE network-speed screen](meblock-filtering-benchmark.md), after generating the pinned public diagnostic dataset as documented there. This full Firefox suite remains active for per-request correctness, modifiers, settings, browser fixtures and pinned input provenance. Its extra timing diagnostics are preserved for research but **excluded from the primary speed verdict**; do not run all of them for each fast iteration.
 
 This test suite compares **two real Firefox builds**, using pinned Git trees:
 

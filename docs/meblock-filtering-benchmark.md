@@ -17,6 +17,91 @@ This workflow uses uBlock Origin's built-in `benchmarkStaticNetFiltering()` in `
 Two fresh **independent upstream-first Firefox pairs** completed (four disposable profiles), each running the real uBO benchmark on 1,552 default-list requests. Built-in durations were **79/49 ms** (upstream/meBlock) in pair 1 and **55/38 ms** in pair 2, rounded to whole milliseconds. Every arm blocked **759** requests. The separate custom matcher-only timing produced **10.562/15.588** and **19.222/8.466 microseconds/request**, even reversing its apparent winner between pairs. The custom timer is therefore **unfit as the primary speed verdict**. The built-in result is directly attributable to uBO's own implementation, but is **not yet precision-qualified** on this very short corpus; both pairs ran in the same upstream-first order and are not an AB/BA candidate study. These are no speedup/regression claims. Keep the saved raw evidence local and ignored.
 
 
+## Run the one primary speed suite (automated Firefox)
+
+Use `tools/meblock/sfne_quick.py`. It packages disposable, default-list-only
+upstream and meBlock builds, launches separate isolated Firefox profiles in
+alternating A/B order, calls **uBO's original benchmark directly** (two
+warmups and five measured calls per profile), validates identical enabled-list
+keys and all uBO block/allow/modifier counts, and saves the complete evidence
+**only** in ignored `dist/build/meblock-sfne/`. This path deliberately skips
+custom matcher loops, per-call/batched p95, browser fixture navigation and
+RAM sampling. It is a speed **screen**, not a correctness or 3% acceptance gate.
+
+Generate the default-list-derived, public-only balanced diagnostic workload
+from a previously verified disposable upstream Firefox run, not from a
+personal browser profile:
+
+```powershell
+python tools/meblock/default_rule_probes.py --addon dist/build/uBlock0.firefox.xpi --selected-run dist/build/meblock-comparison/SESSION/upstream-run-1.json --shards 20 --shard-index 0 --out dist/build/default-rule-probes-sfne-primary.json
+python tools/meblock/sfne_quick.py --dataset dist/build/default-rule-probes-sfne-primary.json --runs 3
+```
+
+Replace `SESSION` with a **local ignored** default-lists verification run.
+The 20-shard workload has approximately 20,000 requests; the exact count,
+digest and selected public lists are pinned by the generated sidecar. The
+number of requests and work distribution are diagnostic, not real browser
+traffic frequency. The program reports medians, all five measurements per
+profile, observed range, exact counters and a **whole-millisecond rounding**
+check. A completed screen is never a credible 3% speedup claim without a
+separate independent noise-qualified A/B study plus the full correctness
+gate. Do not select a winner from overlapping/noisy trials. The bundled
+JS code does not implement another timer; it calls uBO's existing function.
+
+The manual capture workflow below remains available for diagnosis, **not a
+second primary suite**. `compare_original.py` and its older p95 scripts
+remain in the secondary correctness/forensic suite.
+
+### Automated single-suite Firefox verification (2026-10-22)
+
+The new `sfne_quick.py` **actually ran uBO's original SFNE benchmark**
+inside isolated Firefox 157 builds with zero injected filter rules. On the
+balanced, public-default-list-derived 19,824-request corpus, **three
+independent alternating A/B pairs (six Firefox profiles)** completed,
+including 2 warmups and 5 measured uBO calls/profile. All profiles used
+the same 10 enabled lists and identical filtering/modifier counts:
+9,689 blocked, 2 explicitly allowed, 10,133 passed. Uninstrumented
+source builds had zero differing packaged files (same-build noise control).
+
+| Paired profile | Upstream median of 5 trials | meBlock median of 5 trials |
+| --- | ---: | ---: |
+| 1 (upstream first) | 201 ms | 199 ms |
+| 2 (meBlock first) | 206 ms | 204 ms |
+| 3 (upstream first) | 197 ms | 205 ms |
+
+The tool's total six-profile wall time was approximately **89 seconds**.
+All thirty measured trials are retained locally. The smallest measured
+uBO duration was **193 ms**, below the prespecified 200 ms threshold for
+less than 0.5% whole-millisecond rounding uncertainty, so that calibration
+check deliberately returned **false**. Three pairs do not establish 3%
+detectability, an actual candidate speedup, or reduced real-world CPU.
+
+A preliminary 6,196-request one-pair quick run also finished in about
+32 seconds (upstream/meBlock median 62/64 ms), but failed timer-rounding
+qualification. Neither the tiny nor the medium corpus is adequate evidence
+to optimize. The single-suite execution path itself has now been proven
+in Firefox; any precision claim must be established separately.
+
+### Whole-millisecond timer calibration, not a speedup claim
+
+A second quick-screen control used the existing **100,000-request synthetic**
+dataset (ten default enabled filter lists, zero injected filters) across
+**two alternating A/B Firefox pairs**. The same-build source snapshots had
+zero differing files; request decision/modifier aggregate counts were
+identical between every profile. The original uBO benchmark reported
+profile medians **1,706/1,645 ms upstream** and **1,687/1,816 ms meBlock**.
+The shortest individual trial was **1,636 ms**, so the prespecified
+whole-millisecond rounding check **passed**.
+
+This confirms that more requests can make timer quantization negligible.
+It does **not** remove between-profile environmental noise: paired
+differences still change direction on byte-identical source builds.
+The synthetic corpus is not realistic site traffic, and two pairs cannot
+qualify any claimed 3% change. Keep the balanced public-list-derived
+19,824-request corpus as the primary quick smoke workload; use the
+100,000-request synthetic corpus **only for calibration** and never pick
+a speed winner from either result.
+
 ## What upstream measures
 
 The function loads an array of objects containing `frameUrl`, `url`, and `cpt`. It processes the requests with the loaded static filtering engine, times that loop with `performance.now()`, and reports the total requests, elapsed milliseconds, average time per request, and aggregate blocking/modifier counts.
@@ -100,7 +185,7 @@ The comparator uses `elapsed milliseconds / request count` because the upstream 
 python -m unittest discover -s tools/meblock -p test_filtering_benchmark.py -v
 ```
 
-The reproducible dataset and the validation tests can run automatically. The actual engine benchmark needs Firefox and explicit manual capture; it has not been claimed successful merely because the generator and parser pass.
+The reproducible dataset and validation tests run automatically. The **primary** `sfne_quick.py` command also launches real isolated Firefox and captures upstream's built-in benchmark automatically; the manual DevTools method remains optional. Neither unit tests nor merely capturing successful Firefox durations is proof of a small speed gain.
 
 ## Before claiming a speedup
 

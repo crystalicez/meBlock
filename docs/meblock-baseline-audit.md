@@ -4,6 +4,15 @@
 
 **Status: PARTIALLY VERIFIED, NOT YET AN OPTIMIZATION ACCEPTANCE BASELINE.**
 
+The selected primary speed runner `tools/meblock/sfne_quick.py` has now run uBO's
+original SFNE benchmark in real Firefox: three balanced-order pairs on
+19,824 public-list-derived requests, with matching default lists and all
+aggregate decisions/modifiers. Quick measurement and correctness validation
+are deliberately separate. The smallest individual original SFNE time was
+193 ms, below the preset 200 ms whole-millisecond calibration bound; a
+separate two-pair, 100,000-synthetic-request calibration passed timer rounding
+but still showed environmental role/slot noise. **No 3% effect is qualified.**
+
 This audit separates a working test instrument from a repeatable performance
 baseline. The chosen baseline is now the **default enabled lists** in a clean,
 uninstrumented upstream uBlock Origin or meBlock profile, with **no added

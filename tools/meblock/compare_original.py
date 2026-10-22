@@ -115,7 +115,7 @@ def run_build(source, assets):
 
 def probe_package(build, destination, role, endpoint, token, dataset_bytes,
                   *, include_fixture_rules=True, challenge_rules=(),
-                  timing_sensitivity_control=False):
+                  timing_sensitivity_control=False, probe_source=None):
     network_engine = build / "js" / "static-net-filtering.js"
     original_engine = network_engine.read_text(encoding="utf-8")
     if "meblockEngineBufferFootprint" in original_engine:
@@ -150,7 +150,7 @@ def probe_package(build, destination, role, endpoint, token, dataset_bytes,
     if added:
         with core_filters.open("a", encoding="utf-8") as stream:
             stream.write("\n" + "\n".join(added) + "\n")
-    text = PROBE_PATH.read_text(encoding="utf-8")
+    text = (probe_source or PROBE_PATH).read_text(encoding="utf-8")
     if "__MEBLOCK_CONFIG__" not in text:
         raise RuntimeError("Probe configuration placeholder not found")
     (build / "js" / "meblock-probe.js").write_text(
