@@ -459,7 +459,9 @@ per identical-build condition* plus the separate 300-second default-list
 CPU/RAM null control; one pair is diagnostic only. Cross-version A/B
 comparisons must preserve the same workload and method.
 
-## Candidate-effect noise preflight (before optimization)
+## Legacy custom-matcher noise preflight (historical diagnostic only)
+
+**Not part of the canonical readiness gate.** Use `sfne_quick.py --null-control` for the active upstream SFNE benchmark. The command below is kept only to replay the older custom matcher timing experiments.
 
 The **11-gate, three-pair baseline readiness** certifies the controlled
 instrumentation and behavioral fixtures, **not** enough precision to claim

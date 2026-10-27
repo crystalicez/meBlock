@@ -2,7 +2,7 @@
 
 import unittest
 
-from sfne_quick import summarize_runs, validate_official_runs
+from sfne_quick import summarize_runs, validate_official_runs, null_control_exit_code
 
 
 def official(*, duration=250, blocked=2, redirect=0):
@@ -87,6 +87,13 @@ class SfneQuickTests(unittest.TestCase):
         duplicate = profile(selected=["easylist", "easylist"])
         with self.assertRaisesRegex(ValueError, "state is incomplete"):
             validate_official_runs(duplicate, 3)
+
+    def test_null_control_exit_distinguishes_complete_unqualified_from_smoke(self):
+        passed = {"paired_noise": {"ready_for_candidate_effect_screening": True}}
+        failed = {"paired_noise": {"ready_for_candidate_effect_screening": False}}
+        self.assertEqual(null_control_exit_code(True, passed), 0)
+        self.assertEqual(null_control_exit_code(True, failed), 3)
+        self.assertEqual(null_control_exit_code(False, failed), 0)
 
     def test_ten_independent_same_code_pairs_pass_strict_three_percent_null(self):
         from sfne_quick import assess_paired_noise

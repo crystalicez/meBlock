@@ -172,6 +172,13 @@ def summarize_runs(profiles, request_count, *, identical_builds=False):
     }
 
 
+def null_control_exit_code(requested, summary):
+    """Exit 3 marks a completed null test whose variance gate did not pass."""
+    if requested and not summary["paired_noise"]["ready_for_candidate_effect_screening"]:
+        return 3
+    return 0
+
+
 def firefox_quick_run(xpi, role, state, driver_path, firefox_binary, timeout, addon_id):
     options = Options()
     options.binary_location = str(firefox_binary)
@@ -307,18 +314,20 @@ def run(args):
                 raise ValueError("Selected public default lists differ from the generated dataset")
         metadata["benchmark"] = summary
         metadata["status"] = "complete"
+        qualified = summary["paired_noise"]["ready_for_candidate_effect_screening"]
+        metadata["null_qualification"] = (
+            "ready" if qualified else "not_ready"
+        ) if args.null_control else "not_requested"
         print(json.dumps({
             "status": "complete",
             "pairs": args.runs,
             "request_count": len(dataset),
             "timer_rounding_sufficient": summary["whole_ms_rounding_below_half_percent"],
-            "same_build_null_ready": (
-                summary["paired_noise"]["ready_for_candidate_effect_screening"]
-                if args.null_control else False
-            ),
+            "same_build_null_ready": qualified if args.null_control else False,
+            "null_qualification": metadata["null_qualification"],
             "speed_effect_qualified": False,
         }), flush=True)
-        return 0
+        return null_control_exit_code(args.null_control, summary)
     except Exception as error:
         metadata["status"] = "failed"
         metadata["error_type"] = type(error).__name__

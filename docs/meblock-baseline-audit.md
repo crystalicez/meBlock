@@ -61,10 +61,13 @@ No performance change is justified solely by that estimate.
 
 ## Local baseline readiness gate
 
-Before optimization, run `tools/meblock/baseline_readiness.py` against three
-**ignored, local-only** evidence files: a real Firefox injected-rule
-correctness report, a `--default-lists` Firefox parity report from the
-revised harness, and a same-XPI CPU/RAM paired control report. For example:
+**Current gate (2026-10-28):** The previous custom matcher p95 precision gates were retired from READY. `baseline_readiness.py` now requires a pinned, replay-verified same-source upstream SFNE null report; it rechecks source/asset pins, disposable XPI hashes, Firefox version, selected default lists and each measured profile. The existing browser behavior, process CPU/RAM and targeted family checks remain. All historical p95 measurements below are diagnostics, not current speed acceptance. The ten-pair 99,108-request same-code SFNE null failed ±3%; baseline is still **NOT READY**. Reports from an older runner SHA are historical only and must not be reused to qualify the new gate.
+
+Before optimization, run `tools/meblock/baseline_readiness.py` with four
+**ignored, local-only** reports: independent Firefox correctness,
+`--default-lists` per-request parity, a same-XPI CPU/RAM control, and a
+same-source ten-pair original uBO SFNE null control. Include each pinned
+request dataset separately. For example:
 
 ```powershell
 python tools/meblock/baseline_readiness.py `
@@ -73,6 +76,8 @@ python tools/meblock/baseline_readiness.py `
   --default-report dist/build/meblock-comparison/<default-run>/report.json `
   --default-dataset dist/build/default-rule-probes-mixed.json `
   --memory-report dist/build/private-memory/<paired-memory-report>.json `
+  --sfne-report dist/build/meblock-sfne/<sfne-null-run>/report.json `
+  --sfne-dataset dist/build/default-rule-probes-sfne-null-100k.json `
   --memory-xpi dist/build/uBlock0.firefox.xpi `
   --upstream-xpi dist/build/meblock-comparison/<default-run>/upstream/instrumented.xpi `
   --meblock-xpi dist/build/meblock-comparison/<default-run>/meblock/instrumented.xpi

@@ -14,6 +14,7 @@ from zipfile import ZipFile
 from baseline_readiness import (
     REQUIRED_BEHAVIOR, ENGINE_READONLY_FILES, assess, main,
     read_local_report, verify_engine_package_identity, verify_report_replay,
+    verify_sfne_report_replay,
 )
 
 
@@ -182,10 +183,36 @@ def package_evidence(folder, default, memory):
     return source, locations
 
 
+
+def sfne_evidence(*, ready=True):
+    return {
+        "schema": "meblock-quick-sfne-v1",
+        "status": "complete",
+        "null_qualification": "ready" if ready else "not_ready",
+        "same_build_null_control": True,
+        "default_enabled_lists_only": True,
+        "injected_filter_rules": 0,
+        "uses_only_upstream_speed_benchmark": True,
+        "source_refs": {"upstream": "a" * 40, "meblock": "a" * 40},
+        "asset_refs": {"main": "c" * 40, "prod": "d" * 40},
+        "benchmark": {
+            "paired_noise": {
+                "ready_for_candidate_effect_screening": ready,
+                "identical_source_builds": True,
+                "at_least_ten_balanced_abba_pairs": True,
+                "whole_ms_rounding_below_half_percent": True,
+                "pooled_null_equivalent_within_three_percent": ready,
+                "both_run_orders_equivalent_within_three_percent": ready,
+            },
+        },
+    }
+
+
 class BaselineReadinessTests(unittest.TestCase):
     def test_fully_pinned_controllable_evidence_passes_without_claiming_gain(self):
         reports = evidence()
-        result = assess(*reports, engine_verified=True, evidence_replayed=True)
+        result = assess(*reports, engine_verified=True, evidence_replayed=True,
+                        sfne=sfne_evidence(), sfne_replayed=True)
         self.assertTrue(result["ready_for_optimization"])
         self.assertTrue(all(result["checks"].values()))
         self.assertEqual(result["unresolved"], [])
@@ -215,17 +242,6 @@ class BaselineReadinessTests(unittest.TestCase):
                 "navigation"][0].update(
                     allowed_script_resource_duration_ms=0),
              "browser_local_resource_p95"),
-            (1, lambda value: value["comparison"]["batched_matcher"][
-                "meblock"].update(
-                    calibrated_for_amortized_screening=False),
-             "amortized_matcher_context_p95_precision"),
-            (1, lambda value: value["comparison"]["batched_matcher"][
-                "meblock"].update(runs=1),
-             "amortized_matcher_context_p95_precision"),
-            (1, lambda value: value["comparison"]["batched_matcher"][
-                "upstream"].update(
-                    range_run_p95_amortized_context_us=[1.0, 4.0]),
-             "amortized_matcher_context_p95_precision"),
             (2, lambda value: value.update(pairs=1),
              "paired_cpu_memory_null_control"),
             (2, lambda value: value["idle_firefox_cpu"].update(
@@ -282,21 +298,25 @@ class BaselineReadinessTests(unittest.TestCase):
         self.assertFalse(status["ready_for_optimization"])
         self.assertFalse(status["checks"]["pinned_runtime_inputs"])
 
-    def test_one_unstable_request_type_rejects_aggregate_p95_pass(self):
+    def test_old_matcher_p95_is_diagnostic_not_speed_readiness(self):
         reports = list(evidence())
-        good = assess(*reports, engine_verified=True, evidence_replayed=True)
+        original = sfne_evidence()
+        good = assess(*reports, engine_verified=True, evidence_replayed=True,
+                      sfne=original, sfne_replayed=True)
         self.assertTrue(good["ready_for_optimization"])
-        changed = reports[1]["comparison"]["batched_matcher"]["meblock"]
-        changed["by_request_type"]["image"]["stable_three_profile_null_control"] = False
-        bad = assess(*reports, engine_verified=True, evidence_replayed=True)
-        self.assertFalse(bad["ready_for_optimization"])
-        self.assertTrue(bad["checks"]["amortized_matcher_context_p95_precision"])
-        self.assertFalse(bad["checks"]["per_request_type_amortized_p95_precision"])
-        changed["by_request_type"]["image"]["stable_three_profile_null_control"] = True
-        changed["by_request_type"].pop("stylesheet")
-        missing = assess(*reports, engine_verified=True, evidence_replayed=True)
-        self.assertFalse(missing["ready_for_optimization"])
-        self.assertFalse(missing["checks"]["per_request_type_amortized_p95_precision"])
+        reports[1]["comparison"].pop("batched_matcher")
+        unchanged = assess(*reports, engine_verified=True, evidence_replayed=True,
+                           sfne=original, sfne_replayed=True)
+        self.assertTrue(unchanged["ready_for_optimization"])
+        self.assertNotIn("amortized_matcher_context_p95_precision", unchanged["checks"])
+        broken = sfne_evidence(ready=False)
+        failed = assess(*reports, engine_verified=True, evidence_replayed=True,
+                        sfne=broken, sfne_replayed=True)
+        self.assertFalse(failed["ready_for_optimization"])
+        self.assertIn("sfne_same_source_null_equivalence", failed["unresolved"])
+        unreplayed = assess(*reports, engine_verified=True, evidence_replayed=True,
+                            sfne=original, sfne_replayed=False)
+        self.assertFalse(unreplayed["ready_for_optimization"])
 
     def test_sensitivity_only_result_cannot_certify_baseline(self):
         reports = list(evidence())
@@ -508,6 +528,124 @@ class BaselineReadinessTests(unittest.TestCase):
                 report_path, dataset_path, report, default_lists=False,
             ))
 
+    def test_sfne_null_replay_checks_trial_data_hashes_and_provenance(self):
+        from sfne_quick import PROBE, summarize_runs
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset_path = root / "requests.json"
+            dataset = [
+                {"frameUrl": "https://reader.test/", "url": f"https://public{i}.test/a.js",
+                 "cpt": "script"}
+                for i in range(3)
+            ]
+            raw = (json.dumps(dataset) + "\n").encode("utf-8")
+            dataset_path.write_bytes(raw)
+            official = (
+                "Benchmarked static network filtering engine:\n"
+                "Evaluated 3 requests in 1200 ms\n"
+                "Not blocked: 1\nBlocked: 2\nUnblocked: 0\n"
+                "redirect=: 0\nremoveparam=: 0\nurlskip=: 0\n"
+                "csp=: 0\npermissions=: 0\nreplace=: 0\n"
+            )
+            profile = {
+                "status": "ok", "engine_ready": True,
+                "selected_filter_lists": ["easylist", "ublock-filters"],
+                "official_runs": [official] * 5,
+                "firefox_version": "157.0",
+            }
+            saved = {"upstream": [deepcopy(profile) for _ in range(10)],
+                     "meblock": [deepcopy(profile) for _ in range(10)]}
+            summary = summarize_runs(saved, 3, identical_builds=True)
+            packages = {}
+            for role, readings in saved.items():
+                package_path = root / role / "instrumented.xpi"
+                package_path.parent.mkdir()
+                with ZipFile(package_path, "w") as archive:
+                    archive.writestr("manifest.json", '{"name":"public fixture"}')
+                packages[role] = {
+                    "sha256": hashlib.sha256(package_path.read_bytes()).hexdigest(),
+                    "bytes": package_path.stat().st_size,
+                }
+                for index, reading in enumerate(readings, 1):
+                    (root / f"{role}-run-{index}.json").write_text(
+                        json.dumps(reading), encoding="utf-8",
+                    )
+            _, default, _ = evidence()
+            report = {
+                "schema": "meblock-quick-sfne-v1",
+                "status": "complete",
+                "same_build_null_control": True,
+                "default_enabled_lists_only": True,
+                "injected_filter_rules": 0,
+                "uses_only_upstream_speed_benchmark": True,
+                "dataset_rule_derived": True,
+                "build_delta": {"files_different": 0},
+                "source_refs": {"upstream": "a" * 40, "meblock": "a" * 40},
+                "asset_refs": dict(default["assets"]),
+                "runner_sha256": hashlib.sha256(
+                    Path(__file__).with_name("sfne_quick.py").read_bytes()
+                ).hexdigest(),
+                "probe_sha256": hashlib.sha256(PROBE.read_bytes()).hexdigest(),
+                "runs_per_build": 10,
+                "dataset_sha256": hashlib.sha256(raw).hexdigest(),
+                "dataset_count": 3,
+                "packages": packages,
+                "firefox_version": "157.0",
+                "benchmark": summary,
+                "null_qualification": "ready",
+            }
+            manifest = {
+                "selected_list_count": 2,
+                "selected_list_keys_sha256": hashlib.sha256(
+                    b"easylist\nublock-filters"
+                ).hexdigest(),
+            }
+            path = root / "report.json"
+            with patch("compare_original.read_rule_derived_manifest",
+                       return_value=manifest):
+                self.assertTrue(
+                    verify_sfne_report_replay(path, dataset_path, report, default)
+                )
+                modified = deepcopy(report)
+                modified["benchmark"]["paired_noise"]["ready_for_candidate_effect_screening"] = False
+                self.assertFalse(
+                    verify_sfne_report_replay(path, dataset_path, modified, default)
+                )
+                modified = deepcopy(report)
+                modified["runner_sha256"] = "0" * 64
+                self.assertFalse(
+                    verify_sfne_report_replay(path, dataset_path, modified, default)
+                )
+                modified = deepcopy(report)
+                modified["source_refs"]["upstream"] = "9" * 40
+                self.assertFalse(
+                    verify_sfne_report_replay(path, dataset_path, modified, default)
+                )
+                modified = deepcopy(report)
+                modified["packages"]["upstream"]["sha256"] = "0" * 64
+                self.assertFalse(
+                    verify_sfne_report_replay(path, dataset_path, modified, default)
+                )
+                changed_default = deepcopy(default)
+                changed_default["assets"]["main"] = "wrong-asset"
+                self.assertFalse(
+                    verify_sfne_report_replay(path, dataset_path, report, changed_default)
+                )
+                record_path = root / "upstream-run-1.json"
+                record_path.write_text(
+                    json.dumps({**profile, "official_runs":
+                                [official.replace("1200 ms", "4000 ms")] * 5}),
+                    encoding="utf-8",
+                )
+                self.assertFalse(
+                    verify_sfne_report_replay(path, dataset_path, report, default)
+                )
+                record_path.write_text(json.dumps(profile), encoding="utf-8")
+                dataset_path.write_text("[]", encoding="utf-8")
+                self.assertFalse(
+                    verify_sfne_report_replay(path, dataset_path, report, default)
+                )
+
     def test_summary_is_not_enough_without_replay_gate(self):
         result = assess(*evidence(), engine_verified=True)
         self.assertFalse(result["ready_for_optimization"])
@@ -535,17 +673,23 @@ class BaselineReadinessTests(unittest.TestCase):
                 (folder / (name + ".json")).write_text(
                     json.dumps(report), encoding="utf-8"
                 )
+            (folder / "sfne.json").write_text(
+                json.dumps(sfne_evidence()), encoding="utf-8",
+            )
             args = [
                 "--correctness-report", str(folder / "correctness.json"),
                 "--default-report", str(folder / "default.json"),
                 "--memory-report", str(folder / "memory.json"),
+                "--sfne-report", str(folder / "sfne.json"),
+                "--sfne-dataset", str(folder / "sfne-dataset.json"),
                 "--correctness-dataset", str(folder / "correctness-dataset.json"),
                 "--default-dataset", str(folder / "default-dataset.json"),
                 "--memory-xpi", str(stock),
                 "--upstream-xpi", str(paths["upstream"]),
                 "--meblock-xpi", str(paths["meblock"]),
             ]
-            with patch("baseline_readiness.verify_report_replay", return_value=True):
+            with patch("baseline_readiness.verify_report_replay", return_value=True), \
+                    patch("baseline_readiness.verify_sfne_report_replay", return_value=True):
                 self.assertEqual(main(args), 0)
                 baseline_stdout = io.StringIO()
                 with redirect_stdout(baseline_stdout):

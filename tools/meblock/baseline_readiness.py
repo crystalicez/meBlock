@@ -186,8 +186,99 @@ def verify_report_replay(report_path, dataset_path, report, *, default_lists):
         return False
 
 
+def verify_sfne_report_replay(report_path, dataset_path, report, default):
+    """Replay original SFNE Firefox trials and verify pinned public inputs."""
+    from compare_original import read_rule_derived_manifest
+    from filtering_benchmark import valid_rows
+    from sfne_quick import PROBE, summarize_runs
+
+    try:
+        if (
+            report.get("schema") != "meblock-quick-sfne-v1"
+            or report.get("status") != "complete"
+            or report.get("same_build_null_control") is not True
+            or report.get("default_enabled_lists_only") is not True
+            or report.get("injected_filter_rules") != 0
+            or report.get("uses_only_upstream_speed_benchmark") is not True
+            or report.get("dataset_rule_derived") is not True
+            or (report.get("build_delta") or {}).get("files_different") != 0
+            or report.get("source_refs", {}).get("upstream") !=
+                report.get("source_refs", {}).get("meblock")
+            or report.get("source_refs", {}).get("upstream") !=
+                (default.get("refs") or {}).get("upstream")
+            or report.get("asset_refs") != default.get("assets")
+            or report.get("runner_sha256") != hashlib.sha256(
+                Path(__file__).with_name("sfne_quick.py").read_bytes()
+            ).hexdigest()
+            or report.get("probe_sha256") != hashlib.sha256(
+                PROBE.read_bytes()
+            ).hexdigest()
+            or type(report.get("runs_per_build")) is not int
+            or report["runs_per_build"] < 10
+            or report["runs_per_build"] % 2 != 0
+            or not dataset_path.is_file()
+            or not 0 < dataset_path.stat().st_size <= 32 * 1024 * 1024
+        ):
+            return False
+        raw = dataset_path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != report.get("dataset_sha256"):
+            return False
+        dataset = valid_rows(json.loads(raw))
+        if len(dataset) != report.get("dataset_count"):
+            return False
+        manifest = read_rule_derived_manifest(dataset_path, raw, dataset, True)
+        if not isinstance(manifest, dict):
+            return False
+        root = report_path.parent
+        for role in ("upstream", "meblock"):
+            package = (report.get("packages") or {}).get(role) or {}
+            xpi = root / role / "instrumented.xpi"
+            if (
+                not xpi.is_file()
+                or not 0 < xpi.stat().st_size <= 64 * 1024 * 1024
+                or xpi.stat().st_size != package.get("bytes")
+                or hashlib.sha256(xpi.read_bytes()).hexdigest() !=
+                    package.get("sha256")
+            ):
+                return False
+        profiles = {
+            role: [
+                read_local_report(root / f"{role}-run-{index}.json")
+                for index in range(1, report["runs_per_build"] + 1)
+            ]
+            for role in ("upstream", "meblock")
+        }
+        versions = {
+            profile.get("firefox_version")
+            for readings in profiles.values() for profile in readings
+        }
+        if versions != {report.get("firefox_version")} or None in versions:
+            return False
+        summary = summarize_runs(
+            profiles, len(dataset), identical_builds=True,
+        )
+        selected = profiles["upstream"][0]["selected_filter_lists"]
+        selection_digest = hashlib.sha256(
+            "\n".join(sorted(selected)).encode("utf-8")
+        ).hexdigest()
+        if (
+            summary != report.get("benchmark")
+            or not summary["paired_noise"]["identical_source_builds"]
+            or summary["selected_list_count"] != manifest.get("selected_list_count")
+            or selection_digest != manifest.get("selected_list_keys_sha256")
+        ):
+            return False
+        return report.get("null_qualification") == (
+            "ready" if summary["paired_noise"]["ready_for_candidate_effect_screening"]
+            else "not_ready"
+        )
+    except (OSError, ValueError, TypeError, KeyError, IndexError,
+            AttributeError, UnicodeError, OverflowError):
+        return False
+
+
 def assess(correctness, default, memory, *, engine_verified=False,
-           evidence_replayed=False):
+           evidence_replayed=False, sfne=None, sfne_replayed=False):
     c = correctness.get("comparison", {})
     d = default.get("comparison", {})
     m = memory
@@ -326,53 +417,27 @@ def assess(correctness, default, memory, *, engine_verified=False,
         and len(control["navigation"]) == 20
         and all(valid_navigation_sample(sample) for sample in control["navigation"])
     )
-    matcher = d.get("batched_matcher") or {}
-
-    def stable_amortized_context(role):
-        record = matcher.get(role) or {}
-        observed = record.get("range_run_p95_amortized_context_us")
-        median = record.get("median_run_p95_amortized_context_us")
-        return (
-            isinstance(observed, list) and len(observed) == 2
-            and all(type(n) in (int, float) and math.isfinite(n) and n > 0
-                    for n in observed)
-            and observed[0] <= observed[1]
-            and type(median) in (int, float) and math.isfinite(median)
-            and observed[0] <= median <= observed[1]
-            and median > 0
-            and (observed[1] - observed[0]) / median <= 0.5
-        )
-
-    matcher_usable = default_ready and all(
-        (matcher.get(role) or {}).get("schema") ==
-            "meblock-batched-context-match-summary-v2"
-        and (matcher[role].get("runs") or 0) >= 3
-        and matcher[role].get("calibrated_for_amortized_screening") is True
-        and type(matcher[role].get("median_run_p95_amortized_context_us"))
-            in (int, float)
-        and matcher[role]["median_run_p95_amortized_context_us"] > 0
-        and stable_amortized_context(role)
-        for role in ("upstream", "meblock")
+    sfne = sfne if isinstance(sfne, dict) else {}
+    noise = (sfne.get("benchmark") or {}).get("paired_noise") or {}
+    sfne_ready = (
+        sfne_replayed is True
+        and sfne.get("status") == "complete"
+        and sfne.get("null_qualification") == "ready"
+        and sfne.get("same_build_null_control") is True
+        and sfne.get("default_enabled_lists_only") is True
+        and sfne.get("injected_filter_rules") == 0
+        and sfne.get("uses_only_upstream_speed_benchmark") is True
+        and noise.get("ready_for_candidate_effect_screening") is True
+        and noise.get("identical_source_builds") is True
+        and noise.get("at_least_ten_balanced_abba_pairs") is True
+        and noise.get("whole_ms_rounding_below_half_percent") is True
+        and noise.get("pooled_null_equivalent_within_three_percent") is True
+        and noise.get("both_run_orders_equivalent_within_three_percent") is True
+        and (sfne.get("asset_refs") or {}) == default.get("assets")
+        and (sfne.get("source_refs") or {}).get("upstream") ==
+            (default.get("refs") or {}).get("upstream")
     )
-    expected_types = {"script", "image", "xmlhttprequest", "stylesheet"}
-    per_type_precision = default_ready and request_type_breadth and all(
-        (matcher.get(role) or {}).get("schema") ==
-            "meblock-batched-context-match-summary-v2"
-        and isinstance(matcher[role].get("by_request_type"), dict)
-        and set(matcher[role]["by_request_type"]) == expected_types
-        and all(
-            entry.get("contexts_per_pass") == mix[kind]
-            and entry.get("samples_per_run") == 3 * mix[kind]
-            and entry.get("calibrated_for_amortized_screening") is True
-            and entry.get("stable_three_profile_null_control") is True
-            and type(entry.get("median_run_p95_amortized_context_us"))
-                in (float, int)
-            and math.isfinite(entry["median_run_p95_amortized_context_us"])
-            and entry["median_run_p95_amortized_context_us"] > 0
-            for kind, entry in matcher[role]["by_request_type"].items()
-        )
-        for role in ("upstream", "meblock")
-    )
+
     checks = {
         "independent_correctness_fixture": correctness_ready,
         "unmodified_default_list_parity": default_ready,
@@ -383,8 +448,7 @@ def assess(correctness, default, memory, *, engine_verified=False,
         "same_engine_across_memory_and_browser": engine_verified,
         "per_profile_evidence_replay": evidence_replayed,
         "browser_local_resource_p95": local_resource_ready,
-        "amortized_matcher_context_p95_precision": matcher_usable,
-        "per_request_type_amortized_p95_precision": per_type_precision,
+        "sfne_same_source_null_equivalence": sfne_ready,
     }
     return {
         "schema": "meblock-baseline-readiness-v1",
@@ -393,8 +457,9 @@ def assess(correctness, default, memory, *, engine_verified=False,
         "unresolved": [key for key, value in checks.items() if not value],
         "scope": (
             "This gate validates synthetic Firefox correctness and local default-list "
-            "baseline evidence; batched-context p95 is NOT individual-call p95. "
-            "It does not prove every rule, real-site tail latency, addon-only "
+            "baseline evidence; the official SFNE same-source null gate "
+            "replaces legacy custom matcher p95. It does not prove 3% "
+            "detection power, every rule, real-site tail latency, addon-only "
             "CPU/RAM attribution, or a candidate speedup."
         ),
     }
@@ -420,6 +485,10 @@ def main(argv=None):
     parser.add_argument("--correctness-report", type=Path, required=True)
     parser.add_argument("--default-report", type=Path, required=True)
     parser.add_argument("--memory-report", type=Path, required=True)
+    parser.add_argument("--sfne-report", type=Path, required=True,
+                        help="Ignored local same-source SFNE null-control report")
+    parser.add_argument("--sfne-dataset", type=Path, required=True,
+                        help="Pinned public default-list-derived request dataset")
     parser.add_argument("--correctness-dataset", type=Path, required=True)
     parser.add_argument("--default-dataset", type=Path, required=True)
     parser.add_argument("--memory-xpi", type=Path, required=True)
@@ -438,6 +507,10 @@ def main(argv=None):
         correctness = read_local_report(args.correctness_report)
         default = read_local_report(args.default_report)
         memory = read_local_report(args.memory_report)
+        sfne = read_local_report(args.sfne_report)
+        sfne_replayed = verify_sfne_report_replay(
+            args.sfne_report, args.sfne_dataset, sfne, default,
+        )
         verified = verify_engine_package_identity(
             default, memory, args.memory_xpi, {
                 "upstream": args.upstream_xpi,
@@ -457,6 +530,7 @@ def main(argv=None):
         result = assess(
             correctness, default, memory, engine_verified=verified,
             evidence_replayed=replayed,
+            sfne=sfne, sfne_replayed=sfne_replayed,
         )
         if args.target_family or args.target_path:
             module_impact = (

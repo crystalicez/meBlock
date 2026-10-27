@@ -84,7 +84,7 @@ class NoisePreflightTests(unittest.TestCase):
             row["null_equivalent_within_three_percent"]
             for row in stats.values()
         ))
-        self.assertEqual(stats["official"][
+        self.assertEqual(stats["legacy_custom_matcher"][
             "paired_bootstrap_95_percent_interval_percent"
         ], [0.0, 0.0])
         self.assertTrue(all(
@@ -92,7 +92,7 @@ class NoisePreflightTests(unittest.TestCase):
             for row in stats.values()
         ))
         self.assertEqual(
-            stats["official"]["by_run_order"]["meblock_first"]["pairs"], 5,
+            stats["legacy_custom_matcher"]["by_run_order"]["meblock_first"]["pairs"], 5,
         )
 
     def test_balanced_opposite_order_bias_is_rejected_for_both_orders(self):
@@ -100,7 +100,7 @@ class NoisePreflightTests(unittest.TestCase):
         for index, sample in enumerate(profiles["meblock"]):
             sample["us_per_request"] *= 1.05 if index % 2 == 0 else 0.95
         stats = preflight._cohort_stats(profiles)
-        official = stats["official"]
+        official = stats["legacy_custom_matcher"]
         self.assertFalse(official["order_stratified_null_equivalence"])
         self.assertFalse(official["by_run_order"]["upstream_first"][
             "null_equivalent_within_three_percent"
@@ -112,12 +112,12 @@ class NoisePreflightTests(unittest.TestCase):
 
     def test_ten_biased_identical_build_pairs_fail_even_with_repeatability(self):
         stats = preflight._cohort_stats(make_profiles(10, official_shift=0.07))
-        self.assertFalse(stats["official"]["null_equivalent_within_three_percent"])
+        self.assertFalse(stats["legacy_custom_matcher"]["null_equivalent_within_three_percent"])
         self.assertTrue(stats["script"]["null_equivalent_within_three_percent"])
         stats = preflight._cohort_stats(make_profiles(
             10, category_shift={"image": 1.05},
         ))
-        self.assertTrue(stats["official"]["null_equivalent_within_three_percent"])
+        self.assertTrue(stats["legacy_custom_matcher"]["null_equivalent_within_three_percent"])
         self.assertFalse(stats["image"]["null_equivalent_within_three_percent"])
 
     def test_invalid_and_missing_batch_metrics_fail_closed(self):

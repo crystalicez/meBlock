@@ -1,4 +1,4 @@
-"""Fail-closed paired Firefox noise preflight for future candidate claims.
+"""LEGACY custom-matcher noise diagnostic, not the primary uBO SFNE benchmark.
 
 A passing 11-gate three-pair baseline validates measurement plumbing, NOT
 sensitivity to 3% changes. This tool separately requires at least ten
@@ -91,7 +91,7 @@ def _verified_report(path, dataset_path, dataset, digest):
 
 def _sample_pairs(profiles, cohort):
     def value(run):
-        if cohort == "official":
+        if cohort == "legacy_custom_matcher":
             result = run.get("us_per_request")
         else:
             timing = run.get("batched_matcher") or {}
@@ -113,7 +113,7 @@ def _sample_pairs(profiles, cohort):
 
 def _cohort_stats(profiles):
     results = {}
-    for cohort in ("official", *REQUEST_TYPES):
+    for cohort in ("legacy_custom_matcher", *REQUEST_TYPES):
         a, b = _sample_pairs(profiles, cohort)
         result = paired_performance(a, b)
         lower, upper = result["bootstrap_95_percent_interval_percent"]
@@ -228,7 +228,7 @@ def assess_null(null_report, dataset_path, memory_path, stock_xpi):
         "scope": (
             "Null preflight for 3% practical effects; requires >=10 balanced "
             "same-code Firefox pairs and 95% paired-bootstrap median log-ratio "
-            "interval entirely inside +/-3% in official and four per-type "
+            "interval entirely inside +/-3% in legacy custom matcher and four per-type "
             "batched metrics, both pooled and separately for each alternating "
             "AB/BA order. It is an empirical screen, NOT a power proof, "
             "real-site request p95 or evidence of candidate speedup. "
