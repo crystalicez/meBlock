@@ -617,6 +617,11 @@ class BaselineReadinessTests(unittest.TestCase):
                     verify_sfne_report_replay(path, dataset_path, modified, default)
                 )
                 modified = deepcopy(report)
+                modified["timing_diagnostic_only"] = True
+                self.assertFalse(
+                    verify_sfne_report_replay(path, dataset_path, modified, default)
+                )
+                modified = deepcopy(report)
                 modified["source_refs"]["upstream"] = "9" * 40
                 self.assertFalse(
                     verify_sfne_report_replay(path, dataset_path, modified, default)

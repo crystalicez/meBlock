@@ -88,6 +88,28 @@ class SfneQuickTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "state is incomplete"):
             validate_official_runs(duplicate, 3)
 
+    def test_variance_diagnostic_keeps_all_original_trials_separate(self):
+        from sfne_quick import summarize_variance
+        profile = {
+            "diagnostic_warmup_ms": [1400, 1350, 1300, 1250, 1200, 1180, 1160, 1140],
+            "diagnostic_measured_ms": [
+                1130, 1120, 1100, 1090, 1080, 1070,
+                1060, 1050, 1040, 1030, 1020, 1010,
+            ],
+            "diagnostic_total_calls": 20,
+            "diagnostic_host_pressure": {"host_cpu_percent_median": 20.5},
+        }
+        summary = summarize_variance({"upstream": [profile], "meblock": [profile]})
+        record = summary["upstream"][0]
+        self.assertEqual(record["early_median_ms"], 1100)
+        self.assertEqual(record["late_median_ms"], 1030)
+        self.assertEqual(record["measured_min_ms"], 1010)
+        self.assertEqual(len(record["warmup_ms"]), 8)
+        self.assertEqual(record["host_pressure"]["host_cpu_percent_median"], 20.5)
+        profile["diagnostic_measured_ms"].pop()
+        with self.assertRaisesRegex(ValueError, "Incomplete"):
+            summarize_variance({"upstream": [profile]})
+
     def test_null_control_exit_distinguishes_complete_unqualified_from_smoke(self):
         passed = {"paired_noise": {"ready_for_candidate_effect_screening": True}}
         failed = {"paired_noise": {"ready_for_candidate_effect_screening": False}}

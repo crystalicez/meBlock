@@ -197,6 +197,7 @@ def verify_sfne_report_replay(report_path, dataset_path, report, default):
             report.get("schema") != "meblock-quick-sfne-v1"
             or report.get("status") != "complete"
             or report.get("same_build_null_control") is not True
+            or report.get("timing_diagnostic_only") is True
             or report.get("default_enabled_lists_only") is not True
             or report.get("injected_filter_rules") != 0
             or report.get("uses_only_upstream_speed_benchmark") is not True

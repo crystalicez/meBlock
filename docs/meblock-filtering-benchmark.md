@@ -12,6 +12,60 @@ This workflow uses uBlock Origin's built-in `benchmarkStaticNetFiltering()` in `
 
 **Separate on demand:** Firefox Profiler for CPU hot paths, existing Firefox memory experiment and engine-buffer counters for their separately scoped RAM questions. Do not mix profiler or memory capture timing into the network speed screen. Passing the quick screen alone never licenses an optimization: confirm correctness and independently validate a meaningful candidate A/B difference before claiming gains.
 
+### Same-source Firefox variance investigation (2026-10-28)
+
+**Observed, not inferred:** In the earlier ten-pair, 20-profile, 99,108-request
+null-control report, **12 of 20 profiles** had a max/min spread above 25%
+across five measured calls; **two exceeded 2x**. Each call measures only
+uBO's original SFNE matching loop: Firefox startup and dataset loading occur
+outside the timed interval. Byte-identical engine source, ten default lists,
+block/allow/modifier counts and 99,108 requests were fixed.
+
+The optional **diagnostic-only** `sfne_quick.py --diagnose-variance` mode
+uses **eight warmups and twelve original SFNE calls per profile** (last five
+remain in `official_runs`), and samples numerical host CPU activity over the
+post-install wait. These runs are not eligible for null qualification or
+optimization speed claims. Results of two AB/BA same-source pairs, **all Ion
+settings at the Firefox default**, were:
+
+| Role / profile | Median of last five (ms) | CV of twelve calls | Measured min–max (ms) | Median host CPU |
+| --- | ---: | ---: | ---: | ---: |
+| upstream / 1 | 1290 | 18.24% | 954–1642 | 18.8% |
+| meblock / 1 | 1743 | 19.33% | 1025–1862 | 29.3% |
+| meblock / 2 | 1040 | 5.58% | 1008–1202 | 32.5% |
+| upstream / 2 | 1392 | 31.49% | 1040–2259 | 29.2% |
+
+A separate alternating two-pair **setting intervention**, on the same
+source and list selection, configured `javascript.options.ion=false` only
+for the meblock-labelled arm. The last-five profile medians were **1472 and
+1422 ms** at default settings, versus **3279 and 3106 ms** with Ion
+disabled. Twelve-call coefficients of variation remained **11.47–19.44%**
+across these profiles. This demonstrates a strong timing dependence on the
+configured JIT mode, but does **not** establish that JIT tiering causes the
+original same-configuration noise; jitter remained with Ion disabled.
+
+During the diagnostic waits, system-wide CPU medians were **18.8–48%**
+and Firefox's observed descendant-process CPU-time accrual was approximately
+**0.82–0.94 CPU-second per wall-second**. An additional five-second
+no-benchmark host sample had median **24.3% CPU** (range 5.1–32.6%)
+on 20 logical CPUs. Other host work is present, but these coarse samples
+include Firefox's own work and do not establish causation; faster and slower
+profiles overlap in host load. No per-trial GC or scheduling trace was taken.
+
+**Conclusion:** Wrong source/list data, Firefox *launch duration inside*
+the timed SFNE interval, and a simple warmup-count fix are ruled out.
+Changing Ion configuration changes throughput, but does not eliminate
+variance. **Precise GC/JIT-versus-OS scheduler attribution remains
+unresolved**; a focused Firefox Profiler trace or phase-aligned CPU sampling
+is the next justified experiment. The ±3% baseline remains NOT READY.
+
+To reproduce locally (the report stays ignored):
+
+```powershell
+python tools/meblock/sfne_quick.py --dataset dist/build/default-rule-probes-sfne-null-100k.json --runs 2 --upstream-ref upstream/master --meblock-ref upstream/master --diagnose-variance
+python tools/meblock/sfne_quick.py --dataset dist/build/default-rule-probes-sfne-null-100k.json --runs 2 --upstream-ref upstream/master --meblock-ref upstream/master --diagnose-variance --diagnose-no-ion
+```
+
 ### Direct Firefox check of the existing upstream tool (2026-10-22)
 
 Two fresh **independent upstream-first Firefox pairs** completed (four disposable profiles), each running the real uBO benchmark on 1,552 default-list requests. Built-in durations were **79/49 ms** (upstream/meBlock) in pair 1 and **55/38 ms** in pair 2, rounded to whole milliseconds. Every arm blocked **759** requests. The separate custom matcher-only timing produced **10.562/15.588** and **19.222/8.466 microseconds/request**, even reversing its apparent winner between pairs. The custom timer is therefore **unfit as the primary speed verdict**. The built-in result is directly attributable to uBO's own implementation, but is **not yet precision-qualified** on this very short corpus; both pairs ran in the same upstream-first order and are not an AB/BA candidate study. These are no speedup/regression claims. Keep the saved raw evidence local and ignored.

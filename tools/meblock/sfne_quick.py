@@ -27,6 +27,7 @@ from filtering_benchmark import parse_report_text, valid_rows
 
 HERE = Path(__file__).resolve().parent
 PROBE = HERE / "sfne_quick_probe.js"
+VARIANCE_PROBE = HERE / "sfne_variance_probe.js"
 ROLE_ORDER = ("upstream", "meblock")
 
 
@@ -179,7 +180,92 @@ def null_control_exit_code(requested, summary):
     return 0
 
 
-def firefox_quick_run(xpi, role, state, driver_path, firefox_binary, timeout, addon_id):
+def summarize_variance(profiles):
+    """Diagnostics only; never used to decide SFNE performance or readiness."""
+    output = {}
+    for role, readings in profiles.items():
+        output[role] = []
+        for reading in readings:
+            warmup = reading.get("diagnostic_warmup_ms")
+            trials = reading.get("diagnostic_measured_ms")
+            if (
+                not isinstance(warmup, list) or len(warmup) != 8
+                or not isinstance(trials, list) or len(trials) != 12
+                or reading.get("diagnostic_total_calls") != 20
+                or any(type(value) is not int or value <= 0
+                       for value in warmup + trials)
+            ):
+                raise ValueError("Incomplete SFNE variance diagnostic runs")
+            mean = statistics.mean(trials)
+            output[role].append({
+                "warmup_ms": warmup,
+                "measured_ms": trials,
+                "early_median_ms": statistics.median(trials[:5]),
+                "late_median_ms": statistics.median(trials[-5:]),
+                "measured_cv": round(statistics.pstdev(trials) / mean, 4),
+                "measured_min_ms": min(trials),
+                "measured_max_ms": max(trials),
+                "host_pressure": reading.get("diagnostic_host_pressure"),
+            })
+    return output
+
+
+def wait_with_host_samples(state, role, timeout, service):
+    """Sample coarse host load while Firefox finishes; not attribution or SFNE timing."""
+    import psutil
+
+    done = threading.Event()
+    host_cpu = []
+    clock_mhz = []
+    observed_cpu = {}
+    begin = time.monotonic()
+
+    def sample():
+        psutil.cpu_percent(interval=None)
+        while not done.wait(0.25):
+            host_cpu.append(psutil.cpu_percent(interval=None))
+            freq = psutil.cpu_freq()
+            if freq is not None and freq.current > 0:
+                clock_mhz.append(freq.current)
+            try:
+                root = psutil.Process(service.process.pid)
+                processes = [root, *root.children(recursive=True)]
+                for process in processes:
+                    identity = (process.pid, process.create_time())
+                    current = process.cpu_times()
+                    elapsed_cpu = current.user + current.system
+                    prior = observed_cpu.get(identity)
+                    if prior is None:
+                        observed_cpu[identity] = (elapsed_cpu, elapsed_cpu)
+                    else:
+                        observed_cpu[identity] = (prior[0], max(prior[1], elapsed_cpu))
+            except (psutil.Error, OSError):
+                continue
+
+    worker = threading.Thread(target=sample, daemon=True)
+    worker.start()
+    try:
+        received = state.wait(role, timeout)
+    finally:
+        done.set()
+        worker.join(timeout=2)
+    wait_seconds = time.monotonic() - begin
+    process_cpu = sum(last - first for first, last in observed_cpu.values())
+    received["diagnostic_host_pressure"] = {
+        "observation": "Whole post-install wait, includes startup settle; not timed SFNE attribution",
+        "wait_seconds": round(wait_seconds, 2),
+        "host_cpu_percent_median": round(statistics.median(host_cpu), 1) if host_cpu else None,
+        "host_cpu_percent_max": round(max(host_cpu), 1) if host_cpu else None,
+        "cpu_frequency_mhz_median": round(statistics.median(clock_mhz)) if clock_mhz else None,
+        "firefox_tree_observed_cpu_seconds": round(process_cpu, 2),
+        "firefox_tree_cpu_per_wall_second": round(process_cpu / wait_seconds, 3),
+        "host_sample_count": len(host_cpu),
+    }
+    return received
+
+
+def firefox_quick_run(xpi, role, state, driver_path, firefox_binary, timeout, addon_id,
+                      *, diagnose=False, disable_ion=False):
     options = Options()
     options.binary_location = str(firefox_binary)
     options.add_argument("-headless")
@@ -191,11 +277,16 @@ def firefox_quick_run(xpi, role, state, driver_path, firefox_binary, timeout, ad
         "toolkit.telemetry.enabled": False,
     }.items():
         options.set_preference(name, value)
+    if disable_ion:
+        options.set_preference("javascript.options.ion", False)
     service = Service(executable_path=driver_path) if driver_path else Service()
     browser = webdriver.Firefox(options=options, service=service)
     try:
         installed_id = browser.install_addon(str(xpi.resolve()), temporary=True)
-        received = state.wait(role, timeout)
+        if diagnose:
+            received = wait_with_host_samples(state, role, timeout, service)
+        else:
+            received = state.wait(role, timeout)
         if installed_id != addon_id:
             raise RuntimeError("Disposable Firefox addon identity changed")
         if received.get("status") != "ok":
@@ -210,6 +301,12 @@ def firefox_quick_run(xpi, role, state, driver_path, firefox_binary, timeout, ad
 def run(args):
     if args.runs < 1 or args.timeout < 5:
         raise ValueError("Invalid run count or timeout")
+    if args.diagnose_variance and args.null_control:
+        raise ValueError("Variance diagnostic cannot qualify a canonical null control")
+    if args.diagnose_no_ion and not args.diagnose_variance:
+        raise ValueError("Ion toggle is diagnostic-only")
+    if args.diagnose_variance and args.upstream_ref != args.meblock_ref:
+        raise ValueError("Variance diagnostic requires the same source ref for both roles")
     if not args.dataset.is_file() or args.dataset.stat().st_size > 32 * 1024 * 1024:
         raise ValueError("Dataset missing or exceeds 32 MiB")
     raw = args.dataset.read_bytes()
@@ -244,7 +341,9 @@ def run(args):
             role: shared.git("rev-parse", ref)
             for role, ref in (("upstream", args.upstream_ref), ("meblock", args.meblock_ref))
         },
-        "probe_sha256": shared.hash_file(PROBE),
+        "probe_sha256": shared.hash_file(VARIANCE_PROBE if args.diagnose_variance else PROBE),
+        "timing_diagnostic_only": args.diagnose_variance,
+        "ion_disabled_for_meblock_role": args.diagnose_no_ion,
         "runner_sha256": shared.hash_file(Path(__file__)),
         "asset_refs": {
             name: subprocess.check_output(
@@ -270,7 +369,8 @@ def run(args):
             destination = session / role / "instrumented.xpi"
             packages[role] = shared.probe_package(
                 build, destination, role, endpoint, state.token, raw,
-                include_fixture_rules=False, probe_source=PROBE,
+                include_fixture_rules=False,
+                probe_source=VARIANCE_PROBE if args.diagnose_variance else PROBE,
             )
             build_images[role] = destination
         metadata["packages"] = packages
@@ -288,6 +388,8 @@ def run(args):
                 reading = firefox_quick_run(
                     build_images[role], role, state, driver_path,
                     args.firefox, args.timeout, packages[role]["addon_id"],
+                    diagnose=args.diagnose_variance,
+                    disable_ion=args.diagnose_no_ion and role == "meblock",
                 )
                 profiles[role].append(reading)
                 validated = validate_official_runs(reading, len(dataset))
@@ -313,6 +415,8 @@ def run(args):
             if hashlib.sha256(observed.encode("utf-8")).hexdigest() != expected_digest:
                 raise ValueError("Selected public default lists differ from the generated dataset")
         metadata["benchmark"] = summary
+        if args.diagnose_variance:
+            summary["variance_diagnostics"] = summarize_variance(profiles)
         metadata["status"] = "complete"
         qualified = summary["paired_noise"]["ready_for_candidate_effect_screening"]
         metadata["null_qualification"] = (
@@ -344,6 +448,10 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dataset", type=Path, required=True)
     p.add_argument("--runs", type=int, default=3, help="Independent Firefox A/B pairs (alternating order)")
+    p.add_argument("--diagnose-variance", action="store_true",
+                   help="Diagnostic-only: 8 warmups + 12 original SFNE calls and host pressure samples")
+    p.add_argument("--diagnose-no-ion", action="store_true",
+                   help="Diagnostic-only: set javascript.options.ion=false on the meblock-labeled arm")
     p.add_argument("--null-control", action="store_true",
                    help="Require byte-identical source builds for same-code noise screening")
     p.add_argument("--timeout", type=float, default=240)
