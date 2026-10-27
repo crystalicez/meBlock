@@ -4,6 +4,16 @@
 
 **Status: PARTIALLY VERIFIED, NOT YET AN OPTIMIZATION ACCEPTANCE BASELINE.**
 
+On 2026-10-28, the primary upstream SFNE runner completed ten independent
+alternating same-source Firefox A/B pairs on 99,108 public-default-list-derived
+requests. Input, lists and source-byte equality matched and whole-millisecond
+timer calibration passed (smallest trial 965 ms). However the pooled paired
+median same-code difference was +22.8104%, with a 95% CI of
+[-16.4239%, +80.4825%]; both run-order strata also failed the strict
+±3% null-equivalence gate. The tool correctly reports **not ready**.
+These are noise differences with identical code, **not an optimization**.
+Do not substitute legacy custom p95 matcher timing for upstream SFNE.
+
 The selected primary speed runner `tools/meblock/sfne_quick.py` has now run uBO's
 original SFNE benchmark in real Firefox: three balanced-order pairs on
 19,824 public-list-derived requests, with matching default lists and all

@@ -88,6 +88,44 @@ class SfneQuickTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "state is incomplete"):
             validate_official_runs(duplicate, 3)
 
+    def test_ten_independent_same_code_pairs_pass_strict_three_percent_null(self):
+        from sfne_quick import assess_paired_noise
+        same = [1250.0] * 10
+        result = assess_paired_noise(
+            same, same, identical_builds=True, clock_calibrated=True
+        )
+        self.assertTrue(result["ready_for_candidate_effect_screening"])
+        self.assertEqual(result["pooled"]["median_paired_change_percent"], 0.0)
+        self.assertEqual(result["by_run_order"]["upstream_first"]["pairs"], 5)
+        self.assertEqual(result["by_run_order"]["meblock_first"]["pairs"], 5)
+
+    def test_one_run_order_five_percent_drift_fails_even_if_other_order_stable(self):
+        from sfne_quick import assess_paired_noise
+        before = [1250.0] * 10
+        after = [1250.0 if i % 2 == 0 else 1312.5 for i in range(10)]
+        result = assess_paired_noise(
+            before, after, identical_builds=True, clock_calibrated=True
+        )
+        self.assertFalse(result["ready_for_candidate_effect_screening"])
+        self.assertTrue(
+            result["by_run_order"]["upstream_first"]["null_equivalent_within_three_percent"]
+        )
+        self.assertFalse(
+            result["by_run_order"]["meblock_first"]["null_equivalent_within_three_percent"]
+        )
+
+    def test_null_preflight_rejects_small_sample_timer_failure_and_different_builds(self):
+        from sfne_quick import assess_paired_noise
+        for counts, identical, calibrated in (
+            (8, True, True), (10, False, True), (10, True, False)
+        ):
+            result = assess_paired_noise(
+                [1100] * counts, [1100] * counts,
+                identical_builds=identical, clock_calibrated=calibrated,
+            )
+            self.assertFalse(result["ready_for_candidate_effect_screening"])
+
+
 
 if __name__ == "__main__":
     unittest.main()

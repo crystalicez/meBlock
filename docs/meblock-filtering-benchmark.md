@@ -4,7 +4,7 @@ This workflow uses uBlock Origin's built-in `benchmarkStaticNetFiltering()` in `
 
 ## Primary baseline suite: upstream first
 
-**Active primary speed test:** uBlock Origin's own `benchmarkStaticNetFiltering()`, with a pinned, public request dataset and only the **default enabled filter lists**. Keep the existing `filtering_benchmark.py` parser/comparator for captured upstream text output. Use the **same benchmark** for both builds; do not replace its timing with meBlock's custom matcher loops. Warm up before recording runs, alternate A/B order, validate the input hashes and filtering counts, and report observed range alongside median. A 100,000-request corpus is an initial suggestion, not a measured precision guarantee; increase work if whole-millisecond reporting or environmental noise dominates. Synthetic request traffic is a smoke test, never representative user performance.
+**Active primary speed test:** `tools/meblock/sfne_quick.py` invoking uBlock Origin's own `benchmarkStaticNetFiltering()`, with a pinned, public request dataset and only the **default enabled filter lists**. Keep the existing `filtering_benchmark.py` parser/comparator for captured upstream text output. Use the **same benchmark** for both builds; do not replace its timing with meBlock's custom matcher loops. Warm up before recording runs, alternate A/B order, validate the input hashes and filtering counts, and report observed range alongside median. A 100,000-request corpus is an initial suggestion, not a measured precision guarantee; increase work if whole-millisecond reporting or environmental noise dominates. Synthetic request traffic is a smoke test, never representative user performance.
 
 **Existing correctness gate, not an additional speed benchmark:** run `compare_original.py --default-lists` against the same pinned build/list selection when evaluating a candidate. It compares full per-request decision/modifier vectors, state and browser fixtures. Its `official` field contains the real uBO benchmark output, but its `us_per_request` field is a *separate* meBlock-only five-pass matcher+context loop, **not** uBO's benchmark duration. The old null preflight calls that custom field `official` internally; that historic label does not make it uBO's official result.
 
@@ -98,9 +98,52 @@ It does **not** remove between-profile environmental noise: paired
 differences still change direction on byte-identical source builds.
 The synthetic corpus is not realistic site traffic, and two pairs cannot
 qualify any claimed 3% change. Keep the balanced public-list-derived
-19,824-request corpus as the primary quick smoke workload; use the
-100,000-request synthetic corpus **only for calibration** and never pick
-a speed winner from either result.
+19,824-request corpus as the **fast smoke workload**. The new public-list-derived
+99,108-request corpus is the larger SFNE null-calibration input. The
+100,000-request **synthetic** corpus is retained for clock calibration only.
+Never select a speed winner from these same-source controls.
+
+### Extended SFNE same-code noise qualification
+
+The canonical runner now reuses `comparison_stats.paired_performance()` to
+compare independent Firefox profile medians (not intra-profile trials).
+A same-source null control requires ten balanced A/B pairs, a minimum 200-ms
+SFNE duration per trial, and pooled plus both run-order-specific 95% paired
+bootstrap confidence intervals strictly inside ±3%. The quick runner writes
+these statistics to `paired_noise`. This is an equivalence preflight,
+**not** proof that a 3% candidate optimization will be detectable; the
+separate controlled-slowdown sensitivity check remains outstanding.
+
+The 99,108-request public-derived corpus is created from a pinned default-list
+Firefox run using `default_rule_probes.py --shards 4 --max-requests 120000`.
+Its data and manifest remain ignored locally. The old 20,000-request
+safety default is unchanged. Candidate correctness continues to use
+`compare_original.py`. The custom-timer `candidate_noise_preflight.py`
+is **not** the SFNE null gate.
+
+### Full 10-pair upstream same-build SFNE null (2026-10-28)
+
+The real Firefox 157 run completed **ten AB/BA pairs, twenty independent
+profiles** with 99,108 default-list-derived public requests and ten selected
+default lists. The upstream and meBlock roles exported the **same exact
+source commit**; source builds had zero differing files. No extra rules were
+injected. Each profile completed two warmups and five original uBO SFNE
+measurements, with identical aggregate block/allow/modifier counts across arms.
+
+The smallest timed SFNE trial was **965 ms**, so whole-millisecond rounding
+**passed**. The paired median **same-code** difference was **+22.8104%**,
+95% paired-bootstrap interval **[-16.4239%, +80.4825%]**. The upstream-first
+stratum had median **+13.1919%**, interval **[-25.4952%, +67.536%]**; the
+meBlock-first stratum had median **+49.8483%**, interval
+**[-30.8553%, +238.9233%]**. All three ±3% null-equivalence gates **failed**.
+These deltas are **measurement noise from identical code**, not a speedup or
+regression of either project. All trial evidence is ignored and local.
+
+**Result:** Steps 1–3 are implemented and the ten-pair null test ran fully,
+but the baseline is **NOT precision-ready** for a 3% change. The next task
+is to investigate profile/OS runtime noise and separately test known
+sensitivity; adding requests alone did not solve variance. Do not loosen
+the statistical thresholds or cherry-pick trials.
 
 ## What upstream measures
 

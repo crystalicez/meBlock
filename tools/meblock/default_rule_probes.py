@@ -37,6 +37,7 @@ UNRESTRICTED_TYPES = (
     ("stylesheet", "probe.css"),
 )
 MAX_REQUESTS = 20000
+MAX_PRIMARY_REQUESTS = 120000
 
 
 def recognized_rule(line):
@@ -336,6 +337,10 @@ def main(argv=None):
     parser.add_argument("--shards", type=int, default=256)
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument(
+        "--max-requests", type=int, default=MAX_REQUESTS,
+        help="Explicit request cap; default 20,000, maximum 120,000 for SFNE calibration",
+    )
+    parser.add_argument(
         "--family", choices=("all", "exception", "blocking"), default="all",
         help="Create disjoint shards within one selected default rule family",
     )
@@ -348,6 +353,8 @@ def main(argv=None):
         help="Ignored, disposable Firefox run JSON with live selected-filter-list keys",
     )
     args = parser.parse_args(argv)
+    if not 4 <= args.max_requests <= MAX_PRIMARY_REQUESTS:
+        parser.error("--max-requests must be between 4 and 120000")
     output = args.out.resolve()
     if not output.is_relative_to(BUILD_ROOT.resolve()):
         parser.error("Rule-derived request data must remain inside ignored dist/build")
@@ -365,6 +372,7 @@ def main(argv=None):
                 archive, shard_index=args.shard_index, shard_count=args.shards,
                 selected_keys=selected, rule_family=args.family,
                 exception_challenge=args.exception_challenge,
+                max_requests=args.max_requests,
             )
         output.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(rows, separators=(",", ":"), ensure_ascii=False) + "\n"

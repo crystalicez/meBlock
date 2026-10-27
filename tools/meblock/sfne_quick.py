@@ -21,6 +21,7 @@ from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.firefox.service import Service
 
 import compare_original as shared
+from comparison_stats import paired_performance
 from filtering_benchmark import parse_report_text, valid_rows
 
 
@@ -61,7 +62,58 @@ def validate_official_runs(reading, request_count):
     }
 
 
-def summarize_runs(profiles, request_count):
+def assess_paired_noise(upstream, meblock, *, identical_builds, clock_calibrated):
+    """Independent Firefox pairs are the samples; five intra-profile trials are not."""
+    if not upstream or len(upstream) != len(meblock):
+        raise ValueError("Null control requires paired independent profiles")
+    paired = paired_performance(upstream, meblock)
+    balanced = len(upstream) >= 10 and len(upstream) % 2 == 0
+
+    def inside_tolerance(statistics):
+        low, high = statistics["bootstrap_95_percent_interval_percent"]
+        return low > -3.0 and high < 3.0
+
+    by_order = {}
+    for label, first in (("upstream_first", 0), ("meblock_first", 1)):
+        left, right = upstream[first::2], meblock[first::2]
+        if not left:
+            by_order[label] = {
+                "pairs": 0, "null_equivalent_within_three_percent": False,
+            }
+            continue
+        cohort = paired_performance(left, right)
+        by_order[label] = {
+            **cohort,
+            "null_equivalent_within_three_percent": (
+                len(left) >= 5 and inside_tolerance(cohort)
+            ),
+        }
+    pooled_pass = balanced and inside_tolerance(paired)
+    order_pass = balanced and all(
+        result["null_equivalent_within_three_percent"]
+        for result in by_order.values()
+    )
+    return {
+        "identical_source_builds": identical_builds,
+        "at_least_ten_balanced_abba_pairs": balanced,
+        "whole_ms_rounding_below_half_percent": clock_calibrated,
+        "pooled": paired,
+        "pooled_null_equivalent_within_three_percent": pooled_pass,
+        "by_run_order": by_order,
+        "both_run_orders_equivalent_within_three_percent": order_pass,
+        "ready_for_candidate_effect_screening": (
+            identical_builds and balanced and clock_calibrated
+            and pooled_pass and order_pass
+        ),
+        "scope": (
+            "Same-source Firefox negative control only; independent profiles "
+            "are samples, not the five timed trials. An equivalence preflight "
+            "does not prove statistical power to detect a real 3% change."
+        ),
+    }
+
+
+def summarize_runs(profiles, request_count, *, identical_builds=False):
     if len(profiles["upstream"]) != len(profiles["meblock"]) or not profiles["upstream"]:
         raise ValueError("Incomplete A/B benchmark pairs")
     records = {
@@ -85,8 +137,13 @@ def summarize_runs(profiles, request_count):
     minimum = min(
         duration for row in signatures for duration in row["durations_ms_rounded"]
     )
+    paired_noise = assess_paired_noise(
+        samples["upstream"], samples["meblock"],
+        identical_builds=identical_builds, clock_calibrated=minimum >= 200,
+    )
     return {
         "schema": "meblock-upstream-sfne-only-v1",
+        "paired_noise": paired_noise,
         "requests_per_trial": request_count,
         "pairs": len(records["upstream"]),
         "measured_trials_per_profile": 5,
@@ -211,6 +268,10 @@ def run(args):
             build_images[role] = destination
         metadata["packages"] = packages
         metadata["build_delta"] = shared.source_delta(fingerprints["upstream"], fingerprints["meblock"])
+        identical_builds = metadata["build_delta"]["files_different"] == 0
+        if args.null_control and not identical_builds:
+            raise ValueError("Null-control flag requires byte-identical source builds")
+        metadata["same_build_null_control"] = args.null_control
         profiles = {role: [] for role in ROLE_ORDER}
         driver_path = shared.geckodriver_path(None)
         for index in range(args.runs):
@@ -231,7 +292,7 @@ def run(args):
                 (session / (role + "-run-" + str(index + 1) + ".json")).write_text(
                     json.dumps(reading, indent=2) + "\n", encoding="utf-8"
                 )
-        summary = summarize_runs(profiles, len(dataset))
+        summary = summarize_runs(profiles, len(dataset), identical_builds=identical_builds)
         versions = {
             entry.get("firefox_version")
             for readings in profiles.values() for entry in readings
@@ -251,6 +312,10 @@ def run(args):
             "pairs": args.runs,
             "request_count": len(dataset),
             "timer_rounding_sufficient": summary["whole_ms_rounding_below_half_percent"],
+            "same_build_null_ready": (
+                summary["paired_noise"]["ready_for_candidate_effect_screening"]
+                if args.null_control else False
+            ),
             "speed_effect_qualified": False,
         }), flush=True)
         return 0
@@ -270,6 +335,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dataset", type=Path, required=True)
     p.add_argument("--runs", type=int, default=3, help="Independent Firefox A/B pairs (alternating order)")
+    p.add_argument("--null-control", action="store_true",
+                   help="Require byte-identical source builds for same-code noise screening")
     p.add_argument("--timeout", type=float, default=240)
     p.add_argument("--upstream-ref", default="upstream/master")
     p.add_argument("--meblock-ref", default="HEAD")

@@ -38,6 +38,25 @@ def archive(path, reverse=False):
 
 
 class DefaultRuleProbeTests(unittest.TestCase):
+    def test_larger_sfne_request_corpus_requires_explicit_cap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            xpi = Path(directory) / "public-rules.xpi"
+            with ZipFile(xpi, "w") as output:
+                output.writestr(
+                    "assets/ublock/filters.min.txt",
+                    "\n".join(f"||public{index:05d}.example^" for index in range(5001)),
+                )
+            with ZipFile(xpi) as source:
+                with self.assertRaisesRegex(ValueError, "request cap"):
+                    probes.build_probes(source, shard_index=0, shard_count=1)
+                rows, manifest = probes.build_probes(
+                    source, shard_index=0, shard_count=1, max_requests=120000
+                )
+        self.assertEqual(manifest["request_count"], 20004)
+        self.assertEqual(len(rows), 20004)
+        self.assertEqual(manifest["positive_requests"], 10002)
+        self.assertEqual(manifest["near_miss_requests"], 10002)
+
     def test_each_simple_rule_yields_exact_positive_and_near_miss_contexts(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "stock.xpi"
